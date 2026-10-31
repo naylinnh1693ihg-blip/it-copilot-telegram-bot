@@ -65,6 +65,24 @@ describe("grok client", () => {
   it("reports Grok failures without mislabeling them as database errors", () => {
     expect(toUserMessage(new GrokError("upstream request failed", true))).toContain("xAI API key");
     expect(toUserMessage(new GrokError("upstream request failed", true))).not.toContain("data service");
+    expect(toUserMessage(new GrokError("insufficient credits", false, 402))).toContain("active subscription");
+    expect(toUserMessage(new GrokError("insufficient credits", false, 402))).toContain("grok.com/?_s=usage");
+  });
+
+  it("preserves actionable billing errors from Grok intent requests", async () => {
+    const { deps, db } = testDeps();
+    const user = await owner(db);
+    deps.llm = {
+      async completeStructured() {
+        throw new GrokError("insufficient credits", false, 402);
+      },
+      async completeText() {
+        throw new Error("unused");
+      },
+    };
+
+    const reply = await handleText(deps, user, "Read Avaya Administration and make a keynote for a presentation.");
+    expect(reply.text).toContain("Grok reports that the account needs credits or an active subscription");
   });
 });
 

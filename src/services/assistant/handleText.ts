@@ -49,7 +49,8 @@ async function interpret(deps: Deps, user: User, text: string): Promise<Intent> 
   } catch (error) {
     deps.logger.warn({ event: "grok_intent_failed", message: redactString(error instanceof Error ? error.message : "error") }, "using local parser");
     if (local) return local;
-    if (error instanceof GrokError || error instanceof AppError) {
+    if (error instanceof GrokError) throw error;
+    if (error instanceof AppError) {
       throw new AppError("Grok could not understand that message. Try a shorter request, or use /help.");
     }
     throw error;

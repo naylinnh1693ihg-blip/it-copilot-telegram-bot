@@ -13,7 +13,7 @@ export class DatabaseError extends Error {
 }
 
 export class GrokError extends Error {
-  constructor(message: string, public readonly retryable: boolean) {
+  constructor(message: string, public readonly retryable: boolean, public readonly status = 0) {
     super(message);
     this.name = "GrokError";
   }
@@ -22,6 +22,9 @@ export class GrokError extends Error {
 export function toUserMessage(error: unknown): string {
   if (error instanceof AppError) return error.userMessage;
   if (error instanceof GrokError) {
+    if (error.status === 402) {
+      return "Grok reports that the account needs credits or an active subscription. Check account usage at https://grok.com/?_s=usage, then try again.";
+    }
     return "I couldn't get a response from Grok. Check your xAI API key and account credits, then try again.";
   }
   return "I couldn't complete that because the data service returned an error. I did not guess a result.";

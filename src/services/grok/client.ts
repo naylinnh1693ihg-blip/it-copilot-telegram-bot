@@ -34,7 +34,7 @@ function asGrokError(error: unknown): GrokError {
   const status = statusOf(error);
   const retryable = status === 0 || status === 408 || status === 409 || status === 429 || status >= 500;
   const message = error instanceof Error ? error.message : "Grok request failed";
-  return new GrokError(message, retryable);
+  return new GrokError(message, retryable, status);
 }
 
 export function createResilientClient(options: {
