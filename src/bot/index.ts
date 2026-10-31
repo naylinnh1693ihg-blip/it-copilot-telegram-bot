@@ -183,5 +183,5 @@ async function storeFile(
 }
 
 export function telegramWebhook(bot: Bot, secret: string) {
-  return webhookCallback(bot, "express", { secretToken: secret });
+  return webhookCallback(bot, "express", { secretToken: secret, timeoutMilliseconds: 120_000 });
 }

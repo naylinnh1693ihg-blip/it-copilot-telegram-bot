@@ -3,7 +3,7 @@ import { buildStatus } from "../src/bot/handlers/messages.js";
 import { handleText } from "../src/services/assistant/handleText.js";
 import { createResilientClient } from "../src/services/grok/client.js";
 import { explainPrompt, summaryPrompt } from "../src/services/grok/prompts.js";
-import { DatabaseError, GrokError } from "../src/utils/errors.js";
+import { DatabaseError, GrokError, toUserMessage } from "../src/utils/errors.js";
 import { introducedNetworkFacts } from "../src/utils/security.js";
 import { redactString } from "../src/utils/text.js";
 import { owner, testDeps } from "./helpers.js";
@@ -60,6 +60,11 @@ describe("grok client", () => {
     });
     await expect(retrying.completeText({ system: "s", user: "u" })).resolves.toMatchObject({ text: "A clear sentence." });
     expect(server).toBe(2);
+  });
+
+  it("reports Grok failures without mislabeling them as database errors", () => {
+    expect(toUserMessage(new GrokError("upstream request failed", true))).toContain("xAI API key");
+    expect(toUserMessage(new GrokError("upstream request failed", true))).not.toContain("data service");
   });
 });
 

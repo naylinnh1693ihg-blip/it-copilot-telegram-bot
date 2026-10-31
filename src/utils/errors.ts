@@ -21,5 +21,8 @@ export class GrokError extends Error {
 
 export function toUserMessage(error: unknown): string {
   if (error instanceof AppError) return error.userMessage;
+  if (error instanceof GrokError) {
+    return "I couldn't get a response from Grok. Check your xAI API key and account credits, then try again.";
+  }
   return "I couldn't complete that because the data service returned an error. I did not guess a result.";
 }

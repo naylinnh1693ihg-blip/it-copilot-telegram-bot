@@ -125,7 +125,7 @@ A file is stored only after the bytes are validated and the Supabase upload succ
 
 ## 8. Deploy with HTTPS webhooks
 
-This repository includes a Render Blueprint in `render.yaml`. Push the project to a **private** GitHub repository, then create a new Blueprint from that repository in Render. The Blueprint builds with `npm ci && npm run build`, starts with `npm start`, and uses `/health` as its health check.
+This repository includes a Render Blueprint in `render.yaml`. Push the project to a **private** GitHub repository, then create a new Blueprint from that repository in Render. The Blueprint builds with `npm ci --production=false && npm run build`, starts with `npm start`, and uses `/health` as its health check.
 
 The Blueprint uses Render's free web-service plan. Free services can sleep when idle; Telegram webhook delivery may be delayed while the service wakes, and the in-process reminder worker is not reliable while it is asleep. Use an always-on paid plan for reliable reminders and webhook handling.
 
