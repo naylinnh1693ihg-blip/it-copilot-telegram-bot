@@ -58,6 +58,66 @@ describe("documents", () => {
     expect(await db.listDocuments(user.id)).toHaveLength(1);
   });
 
+  it("renames a saved document by number and uses the new title in search", async () => {
+    const { deps, db } = testDeps();
+    const user = await owner(db);
+    const saved = await saveDocument(deps, user, {
+      filename: "guide.txt",
+      declaredMime: "text/plain",
+      buffer: Buffer.from("Switch configuration details"),
+      title: "Old title",
+    });
+
+    const reply = await handleText(deps, user, `Rename document ${saved.document.documentNumber} to Network Switch Guide`);
+    expect(reply.text).toContain('Renamed document 1 to "Network Switch Guide"');
+    await expect(db.findDocument(user.id, 1)).resolves.toMatchObject({ title: "Network Switch Guide" });
+    await expect(handleText(deps, user, "Search my documents for Network Switch Guide")).resolves.toMatchObject({
+      text: expect.stringContaining("Network Switch Guide"),
+    });
+  });
+
+  it("asks for the document number and new title when rename details are missing", async () => {
+    const { deps, db } = testDeps();
+    const user = await owner(db);
+    const reply = await handleText(deps, user, "Rename my document");
+    expect(reply.text).toContain("Which document number");
+    expect(reply.text).toContain("new title");
+  });
+
+  it("does not let Grok override an explicit document rename command", async () => {
+    const { deps, db } = testDeps();
+    const user = await owner(db);
+    await db.insertDocument({
+      id: "document-to-rename",
+      userId: user.id,
+      title: "Old title",
+      originalFilename: "roadmap.txt",
+      storagePath: `${user.id}/roadmap.txt`,
+      mimeType: "text/plain",
+      byteSize: 0,
+      sha256: "document-hash",
+      category: "other",
+      tags: [],
+      createdAt: "2026-10-31T10:00:00.000Z",
+    });
+    deps.llm = {
+      async completeStructured() {
+        return {
+          text: JSON.stringify({ intent: "search_documents", search_query: "2" }),
+          inputTokens: 10,
+          outputTokens: 5,
+        };
+      },
+      async completeText() {
+        throw new Error("not used");
+      },
+    };
+
+    const reply = await handleText(deps, user, "Rename document 1 to DevOps Roadmap");
+    expect(reply.text).toBe('Renamed document 1 to "DevOps Roadmap".');
+    await expect(db.findDocument(user.id, 1)).resolves.toMatchObject({ title: "DevOps Roadmap" });
+  });
+
   it("accepts the png signature and rejects a renamed text file", () => {
     expect(detectFile("photo.png", "image/png", PNG).kind).toBe("png");
     expect(() => detectFile("notes.txt", "text/plain", Buffer.from("safe\0binary"))).toThrow(AppError);

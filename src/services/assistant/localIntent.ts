@@ -161,6 +161,14 @@ export function parseLocalIntent(input: string): Intent | null {
   const summarizeSaved = plain.match(/^summarize all my recent\s+(.+)$/i);
   if (summarizeSaved?.[1]) return blankIntent({ intent: "search_knowledge", search_query: summarizeSaved[1].trim(), tags: "summarize" });
 
+  const renameDocument = plain.match(/^(?:rename|retitle|change the name of)\s+(?:my\s+)?(?:saved\s+)?document\s+#?(\d+)\s+(?:to|as|:)\s+(.+)$/i);
+  if (renameDocument?.[1] && renameDocument[2]) {
+    return blankIntent({ intent: "rename_document", entity_number: Number(renameDocument[1]), title: renameDocument[2].trim() });
+  }
+  if (/^(?:rename|retitle)\s+(?:my\s+)?(?:saved\s+)?document\b/i.test(plain)) {
+    return clarify("Which document number should I rename, and what should its new title be? For example: Rename document 2 to Git Resources.");
+  }
+
   const send = plain.match(/^send me the saved\s+(.+)$/i);
   if (send?.[1]) return blankIntent({ intent: "send_document", search_query: send[1].trim() });
   const findDocs = plain.match(/^(?:find|search) my documents?(?:\s+for)?\s+(.+)$/i);

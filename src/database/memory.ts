@@ -341,6 +341,13 @@ export class MemoryDatabase implements Database {
     return copy(document);
   }
 
+  async renameDocument(userId: string, documentNumber: number, title: string): Promise<DocumentRecord | null> {
+    const document = this.documents.find((item) => item.userId === userId && item.documentNumber === documentNumber && !item.deletedAt);
+    if (!document) return null;
+    document.title = title;
+    return copy(document);
+  }
+
   async findDocument(userId: string, documentNumber: number): Promise<DocumentRecord | null> {
     return copy(this.documents.find((document) => document.userId === userId && document.documentNumber === documentNumber && !document.deletedAt) ?? null);
   }

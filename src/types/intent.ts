@@ -18,6 +18,7 @@ export const INTENT_NAMES = [
   "search_documents",
   "summarize_document",
   "send_document",
+  "rename_document",
   "search_knowledge",
   "search_web",
   "save_knowledge",

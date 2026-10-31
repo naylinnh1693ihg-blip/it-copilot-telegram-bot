@@ -115,6 +115,7 @@ Try:
 - `Remember this: The meeting room printer uses a static IP.`
 - `Show my pending tasks.`
 - `Search the web for the latest Git documentation.`
+- `Rename document 2 to Cisco Switch Configuration.`
 
 Send a PDF, DOCX, XLSX, CSV, TXT, JPG, PNG, or WebP. Images are OCR'd before their text is stored. Add `summarize` or `analyze` to the caption (for example, `Save this as Avaya guide - summarize`) to receive Grok key notes and a concise summary after storage. You can also ask the bot to summarize a saved document later.
 

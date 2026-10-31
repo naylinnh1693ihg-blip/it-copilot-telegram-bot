@@ -10,6 +10,7 @@ import { parseLocalIntent } from "./localIntent.js";
 
 async function interpret(deps: Deps, user: User, text: string): Promise<Intent> {
   const local = parseLocalIntent(text);
+  if (local?.intent === "rename_document") return local;
   if (!deps.llm) {
     return (
       local ??

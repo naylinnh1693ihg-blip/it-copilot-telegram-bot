@@ -119,6 +119,7 @@ export interface Database {
   listKnowledge(userId: string): Promise<KnowledgeEntry[]>;
   searchKnowledge(userId: string, query: string): Promise<KnowledgeEntry[]>;
   insertDocument(input: NewDocument): Promise<DocumentRecord>;
+  renameDocument(userId: string, documentNumber: number, title: string): Promise<DocumentRecord | null>;
   findDocument(userId: string, documentNumber: number): Promise<DocumentRecord | null>;
   findDocumentByHash(userId: string, sha256: string): Promise<DocumentRecord | null>;
   listDocuments(userId: string): Promise<DocumentRecord[]>;

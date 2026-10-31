@@ -448,6 +448,17 @@ export async function execute(deps: Deps, user: User, intent: Intent, options: {
       if (!extraction?.text) return { text: `I stored document ${document.documentNumber}, but it has no extracted text to summarize.` };
       return summarizeDocument(deps, user, extraction.text, extraction.truncated);
     }
+    case "rename_document": {
+      if (!intent.entity_number) return { text: "Which document number should I rename? For example: Rename document 2 to Git Resources." };
+      const title = cleanText(intent.title, 160);
+      if (!title) return { text: `What should the new title for document ${intent.entity_number} be?` };
+      const risk = secretRisk(title);
+      if (risk) return { text: `I didn't rename the document. The title looks like a ${risk}; don't store credentials in document names.` };
+      const renamed = await deps.db.renameDocument(user.id, intent.entity_number, title);
+      if (!renamed) return { text: `I don't have document ${intent.entity_number}.` };
+      await audit(deps, user, "document.rename", "document", renamed.id, { documentNumber: renamed.documentNumber });
+      return { text: `Renamed document ${renamed.documentNumber} to "${renamed.title}".` };
+    }
     case "save_document":
       return { text: "Attach the file in this private chat. You can add a caption such as 'Save this as Cisco network documentation.'" };
     case "prepare_incident_report": {

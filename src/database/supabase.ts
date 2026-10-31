@@ -625,6 +625,19 @@ export class SupabaseDatabase implements Database {
     return isRow(data) ? documentFrom(data) : null;
   }
 
+  async renameDocument(userId: string, documentNumber: number, title: string): Promise<DocumentRecord | null> {
+    const { data, error } = await this.client
+      .from("documents")
+      .update({ title })
+      .eq("user_id", userId)
+      .eq("document_number", documentNumber)
+      .is("deleted_at", null)
+      .select("*")
+      .maybeSingle();
+    this.raise(error);
+    return isRow(data) ? documentFrom(data) : null;
+  }
+
   async findDocumentByHash(userId: string, sha256: string): Promise<DocumentRecord | null> {
     const { data, error } = await this.client
       .from("documents")

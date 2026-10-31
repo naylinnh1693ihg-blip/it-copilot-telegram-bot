@@ -31,6 +31,7 @@ export const HELP_TEXT = [
   "Send a PDF, DOCX, XLSX, CSV, TXT, JPG, or PNG. Add a caption such as:",
   "- Save this as Cisco network documentation.",
   "- Summarize this PDF.",
+  "- Rename document 2 to Cisco Switch Configuration.",
   "",
   "I only save notes when you explicitly ask. I ask before deleting anything.",
   "I do not store passwords, API keys, tokens, or private keys.",
