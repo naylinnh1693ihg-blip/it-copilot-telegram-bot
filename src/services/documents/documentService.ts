@@ -4,7 +4,7 @@ import type { DocumentRecord, User } from "../../types/models.js";
 import { AppError, DatabaseError } from "../../utils/errors.js";
 import { cleanText } from "../../utils/text.js";
 import { toIso } from "../../utils/time.js";
-import { extractDocumentText } from "./extract.js";
+import { extractDocumentText } from "./documentProcessor.js";
 import { detectFile } from "./files.js";
 import { SIGNED_URL_SECONDS } from "./storage.js";
 import { uploadLimit } from "./telegramDownload.js";

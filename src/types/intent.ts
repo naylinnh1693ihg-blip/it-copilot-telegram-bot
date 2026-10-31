@@ -19,6 +19,7 @@ export const INTENT_NAMES = [
   "summarize_document",
   "send_document",
   "search_knowledge",
+  "search_web",
   "save_knowledge",
   "prepare_incident_report",
   "generate_daily_summary",

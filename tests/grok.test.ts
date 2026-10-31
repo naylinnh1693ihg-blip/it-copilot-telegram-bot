@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { buildStatus } from "../src/bot/handlers/messages.js";
 import { handleText } from "../src/services/assistant/handleText.js";
+import { parseLocalIntent } from "../src/services/assistant/localIntent.js";
 import { createResilientClient } from "../src/services/grok/client.js";
 import { explainPrompt, summaryPrompt } from "../src/services/grok/prompts.js";
+import { blankIntent } from "../src/types/intent.js";
 import { DatabaseError, GrokError, toUserMessage } from "../src/utils/errors.js";
 import { introducedNetworkFacts } from "../src/utils/security.js";
 import { redactString } from "../src/utils/text.js";
@@ -60,6 +62,60 @@ describe("grok client", () => {
     });
     await expect(retrying.completeText({ system: "s", user: "u" })).resolves.toMatchObject({ text: "A clear sentence." });
     expect(server).toBe(2);
+  });
+
+  it("requests xAI's built-in web search tool only when requested", async () => {
+    let request: Record<string, unknown> | undefined;
+    const client = createResilientClient({
+      model: "grok-4.7",
+      create: async (body) => {
+        request = body;
+        return { output_text: "Git documentation [[1]](https://git-scm.com/docs)." };
+      },
+    });
+
+    await client.completeText({ system: "Search the web.", user: "Git documentation", webSearch: true });
+    expect(request?.tools).toEqual([{ type: "web_search" }]);
+    expect(request?.store).toBe(false);
+
+    await client.completeText({ system: "Answer from context.", user: "hello" });
+    expect(request?.tools).toBeUndefined();
+  });
+
+  it("routes internet searches to Grok web search and includes source links", async () => {
+    const { deps, db } = testDeps();
+    const user = await owner(db);
+    let webSearchRequested = false;
+    deps.llm = {
+      async completeStructured() {
+        return {
+          text: JSON.stringify(blankIntent({ intent: "search_web", search_query: "official Git reset documentation" })),
+          inputTokens: 10,
+          outputTokens: 5,
+        };
+      },
+      async completeText(input) {
+        webSearchRequested = input.webSearch === true;
+        return {
+          text: "Git reset moves HEAD and updates the index. [[1]](https://git-scm.com/docs/git-reset).",
+          inputTokens: 20,
+          outputTokens: 10,
+        };
+      },
+    };
+
+    const reply = await handleText(deps, user, "Search the web for official Git reset documentation.");
+    expect(webSearchRequested).toBe(true);
+    expect(reply.text).toContain("[1]");
+    expect(reply.text).toContain("Sources:");
+    expect(reply.text).toContain("https://git-scm.com/docs/git-reset");
+  });
+
+  it("recognizes explicit internet searches without a language model", () => {
+    expect(parseLocalIntent("Search the internet for Git resources")).toMatchObject({
+      intent: "search_web",
+      search_query: "Git resources",
+    });
   });
 
   it("reports Grok failures without mislabeling them as database errors", () => {

@@ -1,6 +1,6 @@
 # Personal IT Work Copilot
 
-A private Telegram bot for one IT support technician. It stores tasks, reminders, notes, knowledge, and documents in Supabase, and uses Grok through the xAI API when you want natural-language help, summaries, or clearer English.
+A private Telegram bot for one IT support technician. It stores tasks, reminders, notes, knowledge, and documents in Supabase, and uses Grok through the xAI API for natural-language help, web search, summaries, and clearer English.
 
 The bot is built for one owner now. Every record is tied to a user row, so more people can be added later without mixing their data.
 
@@ -75,7 +75,7 @@ Until `TELEGRAM_OWNER_ID` is set, the bot tells every sender that it is not conf
 4. Leave `XAI_MODEL=grok-4.7` unless you intentionally switch models.
 5. Leave `XAI_BASE_URL=https://api.x.ai/v1`.
 
-The app calls the xAI Responses API with the official OpenAI JavaScript SDK pointed at that base URL. Requests set `store: false`, so xAI is not asked to keep the conversation on its servers. Add credit in the xAI console or requests will fail. The built-in phrases in `/help` still work when the key is missing. Free-form wording, English rewriting, and document summaries need the key.
+The app calls the xAI Responses API with the official OpenAI JavaScript SDK pointed at that base URL. Requests set `store: false`, so xAI is not asked to keep the conversation on its servers. Internet search uses xAI's built-in `web_search` tool and replies include source links. Add credit in the xAI console or requests will fail. The built-in phrases in `/help` still work when the key is missing. Free-form wording, web search, English rewriting, and document summaries need the key.
 
 ## 5. Create Supabase
 
@@ -114,8 +114,11 @@ Try:
 - `Remind me tomorrow at 9 AM to check the server backup.`
 - `Remember this: The meeting room printer uses a static IP.`
 - `Show my pending tasks.`
+- `Search the web for the latest Git documentation.`
 
-Send a PDF, DOCX, XLSX, CSV, TXT, JPG, or PNG with a caption such as `Save this as Cisco network documentation.`
+Send a PDF, DOCX, XLSX, CSV, TXT, JPG, PNG, or WebP. Images are OCR'd before their text is stored. Add `summarize` or `analyze` to the caption (for example, `Save this as Avaya guide - summarize`) to receive Grok key notes and a concise summary after storage. You can also ask the bot to summarize a saved document later.
+
+OCR uses the JavaScript Tesseract worker and Sharp image preprocessing; no Python runtime, Tesseract binary, or separate OCR service is required. The English OCR data is downloaded on first use, so the host must allow outbound HTTPS to the Tesseract.js language-data CDN.
 
 ## 7. File size limit
 
@@ -186,7 +189,8 @@ In the private chat, check:
 - a task, including delete confirmation
 - a reminder, then wait for it or call the cron endpoint
 - a note search that returns only what you saved
-- a small PDF or TXT upload, then `Send me the saved ...`
+- a small PDF, DOCX, TXT, JPG, PNG, or WebP upload with a `summarize` caption; confirm the reply contains Key Notes and Summary
+- `Summarize my saved Avaya guide.`
 - an incident report where you did not supply a time or a cause. The bot should ask for the gap instead of inventing one.
 
 ## 11. Backups and monitoring

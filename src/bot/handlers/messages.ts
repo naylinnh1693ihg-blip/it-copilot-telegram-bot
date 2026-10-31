@@ -21,7 +21,10 @@ export async function sendReply(ctx: Context, reply: Reply): Promise<void> {
   const parts = chunkText(reply.text);
   for (let index = 0; index < parts.length; index += 1) {
     const markup = index === 0 ? (reply.keyboard === "menu" ? mainMenu() : reply.keyboard === "confirm" ? confirmKeyboard() : undefined) : undefined;
-    await ctx.reply(parts[index] ?? "", markup ? { reply_markup: markup } : undefined);
+    await ctx.reply(parts[index] ?? "", {
+      ...(markup ? { reply_markup: markup } : {}),
+      ...(reply.parseMode ? { parse_mode: reply.parseMode } : {}),
+    });
   }
 }
 

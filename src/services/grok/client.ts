@@ -13,7 +13,7 @@ export interface LlmClient {
     schemaName: string;
     schema: Record<string, unknown>;
   }): Promise<LlmResult>;
-  completeText(input: { system: string; user: string }): Promise<LlmResult>;
+  completeText(input: { system: string; user: string; webSearch?: boolean }): Promise<LlmResult>;
 }
 
 export interface ResponseCreate {
@@ -106,7 +106,9 @@ export function createResilientClient(options: {
       );
     },
     completeText(input) {
-      return call(base(input.system, input.user), false);
+      const request = base(input.system, input.user);
+      if (input.webSearch) request.tools = [{ type: "web_search" }];
+      return call(request, false);
     },
   };
 }

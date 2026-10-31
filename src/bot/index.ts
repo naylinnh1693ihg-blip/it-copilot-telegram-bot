@@ -18,9 +18,10 @@ import { buildStatus, currentUser, rememberUser, sendReply } from "./handlers/me
 function captionPlan(caption: string | undefined, filename: string): { title: string; summarize: boolean } {
   const text = caption?.trim() ?? "";
   const named = text.match(/^save this as\s+(.+)$/i);
+  const requestedTitle = (named?.[1] ?? text).replace(/\s*(?:[-,:;]\s*)?(?:and\s+)?(?:summarize|summarise|analyze|analyse)\s*$/i, "").trim();
   return {
-    title: (named?.[1] ?? text ?? filename).slice(0, 160),
-    summarize: /\bsummar/i.test(text),
+    title: (requestedTitle || filename).slice(0, 160),
+    summarize: /\b(summar(?:ize|ise|y)|analy[sz]e|analysis)\b/i.test(text),
   };
 }
 
@@ -152,6 +153,8 @@ async function storeFile(
   ctx: Context,
   file: { fileId: string; fileSize?: number; filename: string; mime: string; caption?: string },
 ): Promise<void> {
+  const plan = captionPlan(file.caption, file.filename);
+  let saved: Awaited<ReturnType<typeof saveDocument>>;
   try {
     const buffer = await downloadTelegramFile({
       token: deps.env.TELEGRAM_BOT_TOKEN,
@@ -160,25 +163,36 @@ async function storeFile(
       fileSize: file.fileSize,
       maxBytes: uploadLimit(deps.env),
     });
-    const plan = captionPlan(file.caption, file.filename);
-    const saved = await saveDocument(deps, currentUser(ctx), {
+    saved = await saveDocument(deps, currentUser(ctx), {
       filename: file.filename,
       declaredMime: file.mime,
       buffer,
       title: plan.title,
       category: matchCategory(`${file.caption ?? ""} ${file.filename}`),
     });
-    if (saved.duplicate) {
-      await ctx.reply(`You already saved this file as document ${saved.document.documentNumber}: ${saved.document.title}.`);
-      return;
-    }
-    await ctx.reply(`Stored document ${saved.document.documentNumber}: ${saved.document.title}.`);
-    if (plan.summarize) {
-      const reply = await execute(deps, currentUser(ctx), blankIntent({ intent: "summarize_document", entity_number: saved.document.documentNumber }), { confirmed: false });
-      await sendReply(ctx, reply);
-    }
   } catch (error) {
     await ctx.reply(error instanceof AppError ? error.userMessage : "I could not store that file. Nothing was saved.");
+    return;
+  }
+
+  const imageWithoutText = saved.document.mimeType.startsWith("image/") && !saved.text.trim();
+  if (saved.duplicate) {
+    await ctx.reply(
+      `You already saved this file as document ${saved.document.documentNumber}: ${saved.document.title}.${imageWithoutText ? "\nI couldn't detect readable text in the image. Try a clearer image to enable search and analysis." : ""}`,
+    );
+  } else {
+    await ctx.reply(
+      `Stored document ${saved.document.documentNumber}: ${saved.document.title}.${imageWithoutText ? "\nI couldn't detect readable text in the image. Try a clearer image to enable search and analysis." : ""}`,
+    );
+  }
+  if (!plan.summarize || imageWithoutText) return;
+
+  try {
+    const reply = await execute(deps, currentUser(ctx), blankIntent({ intent: "summarize_document", entity_number: saved.document.documentNumber }), { confirmed: false });
+    await sendReply(ctx, reply);
+  } catch (error) {
+    deps.logger.error({ event: "document_analysis_failed", message: redactString(error instanceof Error ? error.message : "error") }, "document analysis failed");
+    await ctx.reply(toUserMessage(error));
   }
 }
 

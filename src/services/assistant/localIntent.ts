@@ -27,6 +27,9 @@ export function parseLocalIntent(input: string): Intent | null {
 
   if (/^(help|what can you do)$/i.test(plain)) return blankIntent({ intent: "help" });
 
+  const webSearch = plain.match(/^(?:(?:please|can you|could you)\s+)?(?:search(?:\s+the)?\s+(?:web|internet)|look\s+up(?:\s+online)?|find\s+online)(?:\s+for)?\s*[:,-]?\s*(.+)$/i);
+  if (webSearch?.[1]) return blankIntent({ intent: "search_web", search_query: webSearch[1].trim() });
+
   const summaryAt = plain.match(/^give me my daily summary at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm))$/i);
   if (summaryAt?.[1]) {
     return blankIntent({
