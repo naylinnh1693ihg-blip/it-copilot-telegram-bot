@@ -15,3 +15,9 @@ export function mainMenu(): InlineKeyboard {
 export function confirmKeyboard(): InlineKeyboard {
   return new InlineKeyboard().text("Confirm", "c:yes").text("Cancel", "c:no");
 }
+
+export function inlineButtons(buttons: Array<{ label: string; data: string }>): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  for (const button of buttons) keyboard.text(button.label, button.data);
+  return keyboard;
+}

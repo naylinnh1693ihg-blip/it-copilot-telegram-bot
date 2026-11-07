@@ -13,9 +13,13 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "ingest": "tsx src/jobs/ingestKnowledge.ts",
+    "link-notes": "tsx src/jobs/linkNotes.ts",
+    "test:rag": "tsx src/jobs/testRagPrompt.ts"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^0.1.80",
     "@supabase/supabase-js": "^2.49.8",
     "dotenv": "^16.6.1",
     "exceljs": "^4.4.0",

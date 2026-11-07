@@ -4,7 +4,7 @@ import { saveDocument } from "../services/documents/documentService.js";
 import { downloadTelegramFile, uploadLimit } from "../services/documents/telegramDownload.js";
 import { matchCategory } from "../services/knowledge/categories.js";
 import { handleText } from "../services/assistant/handleText.js";
-import { execute } from "../services/assistant/execute.js";
+import { execute, type Reply } from "../services/assistant/execute.js";
 import { blankIntent } from "../types/intent.js";
 import { AppError, toUserMessage } from "../utils/errors.js";
 import { authorize } from "./middleware/auth.js";
@@ -13,7 +13,8 @@ import { createRateLimiter } from "../utils/security.js";
 import { redactString } from "../utils/text.js";
 import { toIso } from "../utils/time.js";
 import { tasksPhrase } from "./commands/arguments.js";
-import { buildStatus, currentUser, rememberUser, sendReply } from "./handlers/messages.js";
+import { buildStatus, createLiveAnalysis, currentUser, rememberUser, sendReply } from "./handlers/messages.js";
+import { applyReminderButton, parseReminderCallback } from "../services/reminders/buttons.js";
 
 function captionPlan(caption: string | undefined, filename: string): { title: string; summarize: boolean } {
   const text = caption?.trim() ?? "";
@@ -25,9 +26,24 @@ function captionPlan(caption: string | undefined, filename: string): { title: st
   };
 }
 
+async function deliver(
+  deps: Deps,
+  ctx: Context,
+  produce: (onAnalysisPreview: (plainText: string) => Promise<void>) => Promise<Reply>,
+): Promise<void> {
+  const live = createLiveAnalysis(ctx, { minIntervalMs: deps.env.TELEGRAM_EDIT_INTERVAL_MS, logger: deps.logger });
+  try {
+    const reply = await produce((plainText) => live.update(plainText));
+    if (!(await live.finish(reply))) await sendReply(ctx, reply);
+  } catch (error) {
+    deps.logger.error({ event: "document_analysis_failed", message: redactString(error instanceof Error ? error.message : "error") }, "document analysis failed");
+    const message = toUserMessage(error);
+    if (!(await live.finish({ text: message }))) await ctx.reply(message);
+  }
+}
+
 async function runText(deps: Deps, ctx: Context, text: string): Promise<void> {
-  const reply = await handleText(deps, currentUser(ctx), text);
-  await sendReply(ctx, reply);
+  await deliver(deps, ctx, (onAnalysisPreview) => handleText(deps, currentUser(ctx), text, { onAnalysisPreview }));
 }
 
 export function createBot(token: string, deps: Deps): Bot {
@@ -88,6 +104,23 @@ export function createBot(token: string, deps: Deps): Bot {
 
   bot.on("callback_query:data", async (ctx) => {
     const data = ctx.callbackQuery.data;
+    const reminderTap = parseReminderCallback(data);
+    if (reminderTap) {
+      const outcome = await applyReminderButton(deps, currentUser(ctx), reminderTap.action, reminderTap.reminderId);
+      await ctx.answerCallbackQuery({ text: outcome.toast }).catch(() => undefined);
+      if (outcome.editText) {
+        try {
+          await ctx.editMessageText(outcome.editText);
+        } catch (error) {
+          deps.logger.warn(
+            { event: "reminder_edit_failed", reminderId: reminderTap.reminderId, message: redactString(error instanceof Error ? error.message : "edit failed") },
+            "could not edit the reminder message",
+          );
+          await ctx.reply(outcome.text).catch(() => undefined);
+        }
+      }
+      return;
+    }
     await ctx.answerCallbackQuery();
     const action =
       data === "m:today" ? "Show today's tasks"
@@ -176,24 +209,31 @@ async function storeFile(
   }
 
   const imageWithoutText = saved.document.mimeType.startsWith("image/") && !saved.text.trim();
+  const ocrNote = imageWithoutText
+    ? plan.summarize
+      ? "\nOCR didn't find text. I'll ask Grok to look at the picture."
+      : "\nOCR didn't find text. Send it again with the caption \"analyze\" and Grok will look at the picture."
+    : "";
   if (saved.duplicate) {
     await ctx.reply(
-      `You already saved this file as document ${saved.document.documentNumber}: ${saved.document.title}.${imageWithoutText ? "\nI couldn't detect readable text in the image. Try a clearer image to enable search and analysis." : ""}`,
+      `You already saved this file as document ${saved.document.documentNumber}: ${saved.document.title}.${ocrNote}`,
     );
   } else {
     await ctx.reply(
-      `Stored document ${saved.document.documentNumber}: ${saved.document.title}.${imageWithoutText ? "\nI couldn't detect readable text in the image. Try a clearer image to enable search and analysis." : ""}`,
+      `Stored document ${saved.document.documentNumber}: ${saved.document.title}.${ocrNote}`,
     );
   }
-  if (!plan.summarize || imageWithoutText) return;
+  if (!plan.summarize) return;
 
-  try {
-    const reply = await execute(deps, currentUser(ctx), blankIntent({ intent: "summarize_document", entity_number: saved.document.documentNumber }), { confirmed: false });
-    await sendReply(ctx, reply);
-  } catch (error) {
-    deps.logger.error({ event: "document_analysis_failed", message: redactString(error instanceof Error ? error.message : "error") }, "document analysis failed");
-    await ctx.reply(toUserMessage(error));
-  }
+  // Caption asked for a summary. execute() loads the extraction and summarizeDocument()
+  // picks grok-4.7, the long-context model, or the longest model from the text length.
+  // onAnalysisPreview streams Key Notes and Summary into one Telegram message.
+  await deliver(deps, ctx, (onAnalysisPreview) =>
+    execute(deps, currentUser(ctx), blankIntent({ intent: "summarize_document", entity_number: saved.document.documentNumber }), {
+      confirmed: false,
+      onAnalysisPreview,
+    }),
+  );
 }
 
 export function telegramWebhook(bot: Bot, secret: string) {

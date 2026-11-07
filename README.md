@@ -83,11 +83,11 @@ The app calls the xAI Responses API with the official OpenAI JavaScript SDK poin
 2. In **Project Settings → API**, copy the project URL to `SUPABASE_URL`.
 3. Copy the **service role** key to `SUPABASE_SERVICE_ROLE_KEY`. This key bypasses Row Level Security. It must stay in `.env` on the server. Never send it to Telegram.
 4. Copy the anon key to `SUPABASE_ANON_KEY` for your records. This backend does not use the anon key to read data. The migration revokes anon and authenticated access.
-5. Open the SQL editor and run the file `supabase/migrations/20261030120000_initial_schema.sql`.
-   If you install the Supabase CLI later, `supabase db push` can apply the same file.
+5. Open the SQL editor and run the files in `supabase/migrations` in filename order.
+   If you install the Supabase CLI later, `supabase db push` applies them. Trigram search answers identifier lookups from saved records. The equipment file adds equipment cards. The knowledge-chunks file adds pgvector embeddings for question answering. The chunk-type file marks narrative passages and short identifier passages. The chunk-search file returns the source id and chunk type with each match. The hybrid-search file publishes `hybrid_search_chunks` with a 1024-dimension vector. Leave `XAI_EMBEDDING_DIMENSIONS` at 1024. A 1536-dimension embedding will not fit that column.
 6. Confirm the private Storage bucket `documents` exists under **Storage**. The migration creates it when the storage tables are present. If it does not, create a bucket named `documents` and leave **Public** off.
 
-The migration creates users, tasks, reminders, delivery logs, notes, knowledge entries, documents, extractions, Telegram update ids, preferences, audit logs, and AI usage. Search uses PostgreSQL full-text search. Semantic embeddings are not included yet.
+The migrations create users, tasks, reminders, delivery logs, notes, knowledge entries, documents, extractions, Telegram update ids, preferences, audit logs, AI usage, equipment, and knowledge chunks. Exact terms use trigram search. Questions also use xAI embeddings when the chunks have vectors.
 
 ## 6. Run it locally
 
@@ -106,20 +106,40 @@ PORT=3000
 npm run dev
 ```
 
+To embed notes, knowledge, and documents that were saved before retrieval was enabled:
+
+```bash
+npm run ingest
+```
+
+The command skips records whose chunks already match the current text and embedding model. Re-run it after adding `XAI_API_KEY` if the first run stored chunks without vectors.
+
+To try the RAG prompt against Grok without sending a Telegram message:
+
+```bash
+npm run test:rag -- --case ip
+```
+
 The process listens on port 3000 and starts Telegram long polling. Open a **private** chat with your bot and send `/start`.
 
 Try:
 
 - `Create a task to check the Cisco switches tomorrow.`
 - `Remind me tomorrow at 9 AM to check the server backup.`
+- `Add equipment: HP LaserJet, Floor 2, 192.168.1.10`
+- `What's the IP of the HP LaserJet?`
 - `Remember this: The meeting room printer uses a static IP.`
 - `Show my pending tasks.`
+- `What did I close today?`
+- `Week cost`
 - `Search the web for the latest Git documentation.`
 - `Rename document 2 to Cisco Switch Configuration.`
 
-Send a PDF, DOCX, XLSX, CSV, TXT, JPG, PNG, or WebP. Images are OCR'd before their text is stored. Add `summarize` or `analyze` to the caption (for example, `Save this as Avaya guide - summarize`) to receive Grok key notes and a concise summary after storage. You can also ask the bot to summarize a saved document later.
+Send a PDF, DOCX, XLSX, CSV, TXT, JPG, PNG, or WebP. Images are OCR'd before their text is stored. Add `summarize` or `analyze` to the caption (for example, `Save this as Avaya guide - summarize`) to receive Grok key notes and a concise summary after storage. You can also ask the bot to summarize a saved document later. The analysis is requested as strict JSON (`key_notes`, `summary`, and `language`). Telegram edits one message while the answer is still arriving, then replaces it with the finished notes.
 
 OCR uses the JavaScript Tesseract worker and Sharp image preprocessing; no Python runtime, Tesseract binary, or separate OCR service is required. The English OCR data is downloaded on first use, so the host must allow outbound HTTPS to the Tesseract.js language-data CDN.
+
+When you caption a photo, screenshot, or scan with `summarize` or `analyze`, the bot also sends the picture to Grok (JPEG, detail `high`, request history not stored). OCR text is included in the same request when it exists, and Grok reads the image when OCR finds nothing. Scanned PDFs with almost no extracted text are rendered as the first three page images. This needs an image-capable model such as `grok-4.7`, `grok-4.6`, or `grok-4.20`. Each image stays under Grok's 20 MB limit.
 
 ## 7. File size limit
 

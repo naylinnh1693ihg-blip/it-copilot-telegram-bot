@@ -2,6 +2,7 @@ import { DateTime } from "luxon";
 import type { Deps } from "../app/deps.js";
 import type { Reminder, User } from "../types/models.js";
 import { summaryFromRecords } from "../services/assistant/execute.js";
+import { reminderButtons, type ReminderButton } from "../services/reminders/buttons.js";
 import { advanceOccurrence } from "../services/reminders/schedule.js";
 import { redactString } from "../utils/text.js";
 import { toIso } from "../utils/time.js";
@@ -29,7 +30,7 @@ export async function processDueReminders(
     workerId: string;
     limit?: number;
     lockSeconds?: number;
-    send: (telegramUserId: number, text: string) => Promise<{ messageId: number }>;
+    send: (telegramUserId: number, text: string, buttons?: ReminderButton[]) => Promise<{ messageId: number }>;
   },
 ): Promise<ReminderRun> {
   const now = deps.clock.now();
@@ -60,7 +61,7 @@ export async function processDueReminders(
 
     try {
       const text = reminder.kind === "daily_summary" ? await summaryFromRecords(deps, user, now.setZone(reminder.timezone)) : `Reminder: ${reminder.message}`;
-      const sent = await options.send(user.telegramUserId, text);
+      const sent = await options.send(user.telegramUserId, text, reminderButtons(reminder.id));
       await deps.db.finishDelivery(reminder.id, occurrence, "sent", null, sent.messageId, nowIso);
       await deps.db.setLastNotifiedReminder(user.id, reminder.id, nowIso);
       await advance(deps, reminder, occurrence);

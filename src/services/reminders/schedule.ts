@@ -31,7 +31,7 @@ export function parseSchedule(text: string, now: DateTime): ParsedSchedule | nul
     };
   }
 
-  const everyWeek = value.match(/^(?:every\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm))$/i);
+  const everyWeek = value.match(/^(?:every\s+|weekly\s+)?(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\s+(?:at|before|by)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm))$/i);
   if (everyWeek?.[1] && everyWeek[2]) {
     const weekday = weekdayName(everyWeek[1]);
     const clock = parseClock(everyWeek[2]);
@@ -63,7 +63,7 @@ export function parseSchedule(text: string, now: DateTime): ParsedSchedule | nul
     };
   }
 
-  const clockOnly = parseClock(value.replace(/^by\s+/i, ""));
+  const clockOnly = parseClock(value.replace(/^(?:by|before|at)\s+/i, ""));
   if (clockOnly) {
     return { kind: "once", at: nextLocalTime(now, clockOnly.hour, clockOnly.minute), weekdays: [], intervalMinutes: null };
   }

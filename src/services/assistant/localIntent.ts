@@ -1,4 +1,12 @@
 import { blankIntent, type Intent } from "../../types/intent.js";
+import { matchDailyIntent } from "./dailyPatterns.js";
+
+/** Local parses at or above this confidence are executed without a Grok classification call. */
+export const CONFIDENT_LOCAL_CONFIDENCE = 0.9;
+
+export function isConfidentLocalIntent(intent: Intent | null): intent is Intent {
+  return !!intent && intent.confidence >= CONFIDENT_LOCAL_CONFIDENCE;
+}
 
 function clarify(question: string): Intent {
   return blankIntent({ intent: "clarify", clarification_question: question, confidence: 0.9 });
@@ -25,10 +33,15 @@ export function parseLocalIntent(input: string): Intent | null {
   if (!text) return null;
   const plain = withoutFinalPunctuation(text);
 
+  const daily = matchDailyIntent(plain);
+  if (daily) return daily;
+
   if (/^(help|what can you do)$/i.test(plain)) return blankIntent({ intent: "help" });
 
-  const webSearch = plain.match(/^(?:(?:please|can you|could you)\s+)?(?:search(?:\s+the)?\s+(?:web|internet)|look\s+up(?:\s+online)?|find\s+online)(?:\s+for)?\s*[:,-]?\s*(.+)$/i);
-  if (webSearch?.[1]) return blankIntent({ intent: "search_web", search_query: webSearch[1].trim() });
+  const webSearch = plain.match(
+    /^(?:(?:please|can you|could you)\s+)?(?:search(?:\s+the)?\s+(?:web|internet|online)|look\s+up(?:\s+online)?|find\s+online)(?:\s+for)?\s*[:,-]?\s*(.+)$/i,
+  );
+  if (webSearch?.[1]) return blankIntent({ intent: "search_web", search_query: webSearch[1].trim(), tags: "explicit_web" });
 
   const summaryAt = plain.match(/^give me my daily summary at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm))$/i);
   if (summaryAt?.[1]) {
@@ -53,7 +66,10 @@ export function parseLocalIntent(input: string): Intent | null {
 
   const cancel = plain.match(/^cancel my reminder about\s+(.+)$/i);
   if (cancel?.[1]) return blankIntent({ intent: "cancel_reminder", search_query: cancel[1].trim() });
-  if (/^(show|list) my reminders$/i.test(plain)) return blankIntent({ intent: "list_reminders" });
+  if (/^(?:please\s+)?(?:show|list|display)(?:\s+me)?(?:\s+my)?\s+reminders?$/i.test(plain)) {
+    return blankIntent({ intent: "list_reminders" });
+  }
+  if (/^(?:please\s+)?what are my reminders$/i.test(plain)) return blankIntent({ intent: "list_reminders" });
 
   if (/^remind me\s+\d+\s+minutes?\s+before\s+my\b/i.test(plain) && !/\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b/i.test(plain)) {
     return clarify("What time is the meeting? For example: remind me 15 minutes before 3 PM to join the meeting.");
@@ -101,9 +117,6 @@ export function parseLocalIntent(input: string): Intent | null {
 
   if (/\boverdue\b/i.test(plain) && /\btasks?\b/i.test(plain)) return blankIntent({ intent: "list_tasks", list_filter: "overdue" });
   if (/\btoday'?s tasks\b|\btasks today\b/i.test(plain)) return blankIntent({ intent: "list_tasks", list_filter: "today" });
-  if (/\bpending tasks\b|\bshow my tasks\b|\blist tasks\b|\bmy tasks\b/i.test(plain)) {
-    return blankIntent({ intent: "list_tasks", list_filter: "pending" });
-  }
 
   const created = plain.match(/^(?:please\s+)?(?:create|add|make)\s+(?:a\s+)?(?:(low|normal|high|urgent)[- ]priority\s+)?task\s+(?:to\s+)?(.+)$/i);
   if (created?.[2]) {
@@ -117,11 +130,6 @@ export function parseLocalIntent(input: string): Intent | null {
     });
   }
 
-  const note = plain.match(/^remember this:\s*(.+)$/i);
-  if (note?.[1]) return blankIntent({ intent: "save_note", details: note[1].trim(), title: note[1].trim() });
-  if (/^remember how\b/i.test(plain)) {
-    return clarify("What should I remember about that? Send the steps or the fix, starting with 'Remember this:'.");
-  }
   const under = plain.match(/^save this under\s+([^:]+):\s*(.+)$/i);
   if (under?.[1] && under[2]) {
     return blankIntent({ intent: "save_knowledge", category: under[1].trim(), details: under[2].trim(), title: under[2].trim() });
@@ -171,8 +179,14 @@ export function parseLocalIntent(input: string): Intent | null {
 
   const send = plain.match(/^send me the saved\s+(.+)$/i);
   if (send?.[1]) return blankIntent({ intent: "send_document", search_query: send[1].trim() });
-  const findDocs = plain.match(/^(?:find|search) my documents?(?:\s+for)?\s+(.+)$/i);
-  if (findDocs?.[1]) return blankIntent({ intent: "search_documents", search_query: findDocs[1].trim() });
+  const documentSearch = plain.match(
+    /^(?:please\s+)?(?:search|find|look)(?:\s+in)?(?:\s+(?:my|the))?\s+(?:documents?|docs|pdfs?|files?)(?:\s+for|\s*:)?\s*(.*)$/i,
+  );
+  if (documentSearch) {
+    const query = documentSearch[1]?.trim() ?? "";
+    if (!query) return clarify("What should I look for? For example: Search documents for printer IP.");
+    return blankIntent({ intent: "search_documents", search_query: query });
+  }
   const summarize = plain.match(/^summarize (?:this |my )?(pdf|document|file)?\s*(.*)$/i);
   if (summarize) return blankIntent({ intent: "summarize_document", search_query: summarize[2]?.trim() ?? "" });
 

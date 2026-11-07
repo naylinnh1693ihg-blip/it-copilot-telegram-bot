@@ -5,6 +5,7 @@ import type {
   ConversationTurn,
   Delivery,
   DocumentRecord,
+  Equipment,
   Extraction,
   KnowledgeEntry,
   Note,
@@ -14,7 +15,8 @@ import type {
   UsageEntry,
   User,
 } from "../types/models.js";
-import type { Database, NewDocument, NewKnowledge, NewNote, NewReminder, NewTask } from "./types.js";
+import { SAVED_TEXT_MIN_SIMILARITY, cosineSimilarity, hybridScore, trigramWordSimilarity } from "./similarity.js";
+import type { ChunkHit, ChunkSource, CompletedTask, Database, NewDocument, NewEquipment, NewKnowledge, NewNote, NewReminder, NewTask, SavedTextHit, StoredChunk, UsageSlice } from "./types.js";
 
 interface Counters {
   task: number;
@@ -22,6 +24,7 @@ interface Counters {
   note: number;
   knowledge: number;
   document: number;
+  equipment: number;
 }
 
 function copy<T>(value: T): T {
@@ -52,6 +55,8 @@ export class MemoryDatabase implements Database {
   private noteDocuments: Array<{ noteId: string; documentId: string }> = [];
   private knowledge: KnowledgeEntry[] = [];
   private documents: DocumentRecord[] = [];
+  private equipment: Equipment[] = [];
+  private chunks: Array<StoredChunk & { userId: string }> = [];
   private extractions: Extraction[] = [];
   private updates = new Set<number>();
   private updateLog: Array<{ updateId: number; telegramUserId: number | null; at: string }> = [];
@@ -65,7 +70,7 @@ export class MemoryDatabase implements Database {
   }
 
   private nextCounter(userId: string, kind: keyof Counters): number {
-    const current = this.counters.get(userId) ?? { task: 0, reminder: 0, note: 0, knowledge: 0, document: 0 };
+    const current = this.counters.get(userId) ?? { task: 0, reminder: 0, note: 0, knowledge: 0, document: 0, equipment: 0 };
     current[kind] += 1;
     this.counters.set(userId, current);
     return current[kind];
@@ -97,7 +102,7 @@ export class MemoryDatabase implements Database {
       updatedAt: input.at,
     };
     this.users.push(user);
-    this.counters.set(user.id, { task: 0, reminder: 0, note: 0, knowledge: 0, document: 0 });
+    this.counters.set(user.id, { task: 0, reminder: 0, note: 0, knowledge: 0, document: 0, equipment: 0 });
     return copy(user);
   }
 
@@ -171,6 +176,23 @@ export class MemoryDatabase implements Database {
     return this.events.filter((event) => event.taskId === task.id).map((event) => copy(event));
   }
 
+  async listCompletedTasks(userId: string, fromInclusive: string, untilExclusive: string): Promise<CompletedTask[]> {
+    return this.events
+      .filter(
+        (event) =>
+          event.userId === userId &&
+          event.action === "completed" &&
+          event.createdAt >= fromInclusive &&
+          event.createdAt < untilExclusive,
+      )
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .flatMap((event) => {
+        const task = this.tasks.find((item) => item.id === event.taskId);
+        if (!task) return [];
+        return [{ taskNumber: task.taskNumber, title: task.title, closedAt: event.createdAt }];
+      });
+  }
+
   async insertReminder(input: NewReminder): Promise<{ reminder: Reminder; created: boolean }> {
     const existing = this.reminders.find(
       (reminder) => reminder.userId === input.userId && reminder.status === "active" && reminder.dedupeKey === input.dedupeKey,
@@ -199,6 +221,10 @@ export class MemoryDatabase implements Database {
 
   async findReminder(userId: string, reminderNumber: number): Promise<Reminder | null> {
     return copy(this.reminders.find((reminder) => reminder.userId === userId && reminder.reminderNumber === reminderNumber) ?? null);
+  }
+
+  async findReminderById(id: string): Promise<Reminder | null> {
+    return copy(this.reminders.find((reminder) => reminder.id === id) ?? null);
   }
 
   async listReminders(userId: string): Promise<Reminder[]> {
@@ -287,6 +313,10 @@ export class MemoryDatabase implements Database {
     return copy(this.notes.find((note) => note.userId === userId && note.noteNumber === noteNumber) ?? null);
   }
 
+  async listUserIds(): Promise<string[]> {
+    return this.users.map((user) => user.id);
+  }
+
   async listNotes(userId: string): Promise<Note[]> {
     return this.notes.filter((note) => note.userId === userId && !note.deletedAt).map((note) => copy(note));
   }
@@ -297,16 +327,16 @@ export class MemoryDatabase implements Database {
       .map((note) => copy(note));
   }
 
-  async linkNoteTask(noteId: string, taskId: string): Promise<void> {
-    if (!this.noteTasks.some((link) => link.noteId === noteId && link.taskId === taskId)) {
-      this.noteTasks.push({ noteId, taskId });
-    }
+  async linkNoteTask(noteId: string, taskId: string): Promise<boolean> {
+    if (this.noteTasks.some((link) => link.noteId === noteId && link.taskId === taskId)) return false;
+    this.noteTasks.push({ noteId, taskId });
+    return true;
   }
 
-  async linkNoteDocument(noteId: string, documentId: string): Promise<void> {
-    if (!this.noteDocuments.some((link) => link.noteId === noteId && link.documentId === documentId)) {
-      this.noteDocuments.push({ noteId, documentId });
-    }
+  async linkNoteDocument(noteId: string, documentId: string): Promise<boolean> {
+    if (this.noteDocuments.some((link) => link.noteId === noteId && link.documentId === documentId)) return false;
+    this.noteDocuments.push({ noteId, documentId });
+    return true;
   }
 
   async insertKnowledge(input: NewKnowledge): Promise<KnowledgeEntry> {
@@ -360,6 +390,30 @@ export class MemoryDatabase implements Database {
     return this.documents.filter((document) => document.userId === userId && !document.deletedAt).map((document) => copy(document));
   }
 
+  async searchSavedText(userId: string, query: string): Promise<SavedTextHit[]> {
+    const needle = query.trim().slice(0, 200);
+    if (!needle) return [];
+    const hits: SavedTextHit[] = [];
+    const consider = (source: SavedTextHit["source"], sourceNumber: number, title: string, body: string) => {
+      const haystack = `${title}\n${body}`;
+      const similarity = haystack.toLowerCase().includes(needle.toLowerCase()) ? 1 : trigramWordSimilarity(needle, haystack);
+      if (similarity < SAVED_TEXT_MIN_SIMILARITY) return;
+      hits.push({ source, sourceNumber, title, excerpt: body.slice(0, 500), similarity });
+    };
+    for (const note of this.notes) {
+      if (note.userId === userId && !note.deletedAt) consider("note", note.noteNumber, note.title, note.content);
+    }
+    for (const entry of this.knowledge) {
+      if (entry.userId === userId && !entry.deletedAt) consider("knowledge", entry.entryNumber, entry.title, entry.content);
+    }
+    for (const document of this.documents) {
+      if (document.userId !== userId || document.deletedAt) continue;
+      const extraction = this.extractions.find((item) => item.documentId === document.id);
+      consider("document", document.documentNumber, document.title, extraction?.text ?? "");
+    }
+    return hits.sort((left, right) => right.similarity - left.similarity || left.source.localeCompare(right.source)).slice(0, 8);
+  }
+
   async searchDocuments(userId: string, query: string): Promise<DocumentRecord[]> {
     return this.documents
       .filter((document) => {
@@ -374,6 +428,29 @@ export class MemoryDatabase implements Database {
     const index = this.extractions.findIndex((item) => item.documentId === extraction.documentId);
     if (index >= 0) this.extractions[index] = copy(extraction);
     else this.extractions.push(copy(extraction));
+  }
+
+  async insertEquipment(input: NewEquipment): Promise<Equipment> {
+    const item: Equipment = {
+      id: randomUUID(),
+      equipmentNumber: this.nextCounter(input.userId, "equipment"),
+      deletedAt: null,
+      updatedAt: input.createdAt,
+      ...input,
+    };
+    this.equipment.push(item);
+    return copy(item);
+  }
+
+  async updateEquipment(item: Equipment): Promise<Equipment> {
+    const index = this.equipment.findIndex((entry) => entry.id === item.id);
+    if (index < 0) throw new Error("Equipment not found");
+    this.equipment[index] = copy(item);
+    return copy(item);
+  }
+
+  async listEquipment(userId: string): Promise<Equipment[]> {
+    return this.equipment.filter((item) => item.userId === userId && !item.deletedAt).map((item) => copy(item));
   }
 
   async getExtraction(documentId: string): Promise<Extraction | null> {
@@ -425,6 +502,69 @@ export class MemoryDatabase implements Database {
 
   async recordUsage(entry: Omit<UsageEntry, "id">): Promise<void> {
     this.usage.push({ ...entry, id: randomUUID() });
+  }
+
+  async replaceChunks(userId: string, source: ChunkSource, sourceId: string, chunks: StoredChunk[]): Promise<void> {
+    this.chunks = this.chunks.filter((chunk) => !(chunk.userId === userId && chunk.source === source && chunk.sourceId === sourceId));
+    for (const chunk of chunks) this.chunks.push({ ...chunk, userId });
+  }
+
+  async listChunks(userId: string, source: ChunkSource, sourceId: string): Promise<StoredChunk[]> {
+    return this.chunks
+      .filter((chunk) => chunk.userId === userId && chunk.source === source && chunk.sourceId === sourceId)
+      .map((chunk) => ({
+        source: chunk.source,
+        sourceId: chunk.sourceId,
+        sourceNumber: chunk.sourceNumber,
+        title: chunk.title,
+        chunkIndex: chunk.chunkIndex,
+        content: chunk.content,
+        chunkType: chunk.chunkType,
+        embedding: null,
+        embeddingModel: chunk.embeddingModel,
+        metadata: { chunk_type: chunk.chunkType, embedding_model: chunk.embeddingModel },
+      }))
+      .sort((left, right) => left.chunkIndex - right.chunkIndex);
+  }
+
+  async searchChunks(userId: string, query: string, embedding: number[] | null, embeddingModel: string | null, limit: number): Promise<ChunkHit[]> {
+    const q = query.trim().slice(0, 200);
+    if (!q) return [];
+    return this.chunks
+      .filter((chunk) => chunk.userId === userId)
+      .map((chunk) => {
+        const lexical = Math.max(
+          chunk.title.toLowerCase().includes(q.toLowerCase()) || chunk.content.toLowerCase().includes(q.toLowerCase()) ? 1 : 0,
+          trigramWordSimilarity(q, `${chunk.title} ${chunk.content}`),
+        );
+        const sameModel = !chunk.embeddingModel || !embeddingModel || chunk.embeddingModel === embeddingModel;
+        const hasVector = !!embedding && !!chunk.embedding && sameModel;
+        const vectorScore = hasVector && embedding && chunk.embedding ? Math.max(0, cosineSimilarity(embedding, chunk.embedding)) : 0;
+        const score = hybridScore(lexical, vectorScore, hasVector);
+        return {
+          source: chunk.source,
+          sourceId: chunk.sourceId,
+          sourceNumber: chunk.sourceNumber,
+          title: chunk.title,
+          content: chunk.content,
+          chunkType: chunk.chunkType,
+          lexical,
+          vectorScore,
+          score,
+          metadata: { chunk_type: chunk.chunkType, embedding_model: chunk.embeddingModel },
+        };
+      })
+      .filter((hit) => hit.lexical >= SAVED_TEXT_MIN_SIMILARITY || hit.vectorScore >= 0.45 || hit.score >= SAVED_TEXT_MIN_SIMILARITY)
+      .sort((left, right) => right.score - left.score || left.source.localeCompare(right.source) || left.sourceNumber - right.sourceNumber)
+      .slice(0, Math.min(Math.max(limit, 1), 16));
+  }
+
+  async listUsage(userId: string, fromInclusive: string, untilExclusive: string): Promise<UsageSlice[]> {
+    const from = Date.parse(fromInclusive);
+    const until = Date.parse(untilExclusive);
+    return this.usage
+      .filter((entry) => entry.userId === userId && Date.parse(entry.createdAt) >= from && Date.parse(entry.createdAt) < until)
+      .map((entry) => ({ model: entry.model, inputTokens: entry.inputTokens, outputTokens: entry.outputTokens }));
   }
 }
 

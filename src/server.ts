@@ -4,6 +4,7 @@ import { createSupabaseClient, SupabaseDatabase } from "./database/supabase.js";
 import { createSupabaseStorage } from "./services/documents/storage.js";
 import { createXaiClient } from "./services/grok/xai.js";
 import { createBot, telegramWebhook } from "./bot/index.js";
+import { inlineButtons } from "./bot/keyboards/menus.js";
 import { createHttpApp } from "./routes/http.js";
 import { processDueReminders } from "./jobs/processReminders.js";
 import { createLogger } from "./utils/logger.js";
@@ -50,11 +51,16 @@ async function main(): Promise<void> {
   }
 
   const bot = createBot(env.TELEGRAM_BOT_TOKEN, deps);
+  const sendReminder = async (telegramUserId: number, text: string, buttons?: Array<{ label: string; data: string }>) => {
+    const sent = await bot.api.sendMessage(
+      telegramUserId,
+      text,
+      buttons?.length ? { reply_markup: inlineButtons(buttons) } : undefined,
+    );
+    return { messageId: sent.message_id };
+  };
   const app = createHttpApp(deps, {
-    sendTelegram: async (telegramUserId, text) => {
-      const sent = await bot.api.sendMessage(telegramUserId, text);
-      return { messageId: sent.message_id };
-    },
+    sendTelegram: sendReminder,
     webhook: env.TELEGRAM_MODE === "webhook" ? telegramWebhook(bot, env.TELEGRAM_WEBHOOK_SECRET) : undefined,
   });
 
@@ -76,10 +82,7 @@ async function main(): Promise<void> {
     const timer = setInterval(() => {
       void processDueReminders(deps, {
         workerId: `poll-${process.pid}`,
-        send: async (telegramUserId, text) => {
-          const sent = await bot.api.sendMessage(telegramUserId, text);
-          return { messageId: sent.message_id };
-        },
+        send: sendReminder,
       }).catch((error: unknown) => {
         logger.error({ event: "reminder_poll_failed", message: error instanceof Error ? error.message : "error" }, "reminder poll failed");
       });

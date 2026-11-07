@@ -3,6 +3,8 @@ import { IntentSchema, type Intent } from "../types/intent.js";
 import type {
   ConversationTurn,
   DocumentRecord,
+  Equipment,
+  EquipmentKind,
   Extraction,
   KnowledgeEntry,
   Note,
@@ -17,7 +19,7 @@ import type {
 } from "../types/models.js";
 import { DatabaseError } from "../utils/errors.js";
 import { redactString } from "../utils/text.js";
-import type { Database, NewDocument, NewKnowledge, NewNote, NewReminder, NewTask } from "./types.js";
+import type { ChunkHit, ChunkSource, CompletedTask, Database, NewDocument, NewEquipment, NewKnowledge, NewNote, NewReminder, NewTask, SavedTextHit, StoredChunk, UsageSlice } from "./types.js";
 
 type Row = Record<string, unknown>;
 
@@ -47,6 +49,13 @@ function textOrNull(row: Row, key: string): string | null {
   return text(row, key);
 }
 
+function real(row: Row, key: string): number {
+  const value = row[key];
+  const number = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  if (!Number.isFinite(number)) throw new DatabaseError(`Column ${key} was not a number.`);
+  return number;
+}
+
 function integer(row: Row, key: string): number {
   const value = row[key];
   const number = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
@@ -64,6 +73,41 @@ function numberList(row: Row, key: string): number[] {
   const value = row[key];
   if (!Array.isArray(value)) return [];
   return value.map((item) => Number(item)).filter((item) => Number.isInteger(item));
+}
+
+function completedTaskFrom(row: Row): CompletedTask {
+  const task = row.tasks;
+  const taskRow = Array.isArray(task) ? task.find(isRow) : isRow(task) ? task : null;
+  if (!taskRow) throw new DatabaseError("Completed task event had no task.");
+  const title = text(taskRow, "title").trim() || text(row, "summary");
+  return {
+    taskNumber: integer(taskRow, "task_number"),
+    title,
+    closedAt: text(row, "created_at"),
+  };
+}
+
+function equipmentKind(value: string): EquipmentKind {
+  if (value === "printer" || value === "switch" || value === "access_point" || value === "other") return value;
+  throw new DatabaseError("Equipment type was not recognized.");
+}
+
+function equipmentFrom(row: Row): Equipment {
+  return {
+    id: text(row, "id"),
+    userId: text(row, "user_id"),
+    equipmentNumber: integer(row, "equipment_number"),
+    name: text(row, "name"),
+    kind: equipmentKind(text(row, "kind")),
+    location: text(row, "location"),
+    ipAddress: text(row, "ip_address"),
+    notes: text(row, "notes"),
+    sourceNoteId: textOrNull(row, "source_note_id"),
+    sourceDocumentId: textOrNull(row, "source_document_id"),
+    createdAt: text(row, "created_at"),
+    updatedAt: text(row, "updated_at"),
+    deletedAt: textOrNull(row, "deleted_at"),
+  };
 }
 
 function userFrom(row: Row, dailySummaryLocalTime: string | null): User {
@@ -353,6 +397,20 @@ export class SupabaseDatabase implements Database {
     }));
   }
 
+  async listCompletedTasks(userId: string, fromInclusive: string, untilExclusive: string): Promise<CompletedTask[]> {
+    // action = 'completed' and created_at in [local midnight, next local midnight).
+    const { data, error } = await this.client
+      .from("task_events")
+      .select("created_at, summary, tasks!inner(task_number, title)")
+      .eq("user_id", userId)
+      .eq("action", "completed")
+      .gte("created_at", fromInclusive)
+      .lt("created_at", untilExclusive)
+      .order("created_at", { ascending: true });
+    this.raise(error);
+    return rows(data).map(completedTaskFrom);
+  }
+
   async insertReminder(input: NewReminder): Promise<{ reminder: Reminder; created: boolean }> {
     const reminderNumber = await this.allocate(input.userId, "reminder");
     const inserted = await this.client
@@ -415,6 +473,12 @@ export class SupabaseDatabase implements Database {
     this.raise(error);
     if (!isRow(data)) throw new DatabaseError("Reminder update returned no row.");
     return reminderFrom(data);
+  }
+
+  async findReminderById(id: string): Promise<Reminder | null> {
+    const { data, error } = await this.client.from("reminders").select("*").eq("id", id).maybeSingle();
+    this.raise(error);
+    return isRow(data) ? reminderFrom(data) : null;
   }
 
   async findReminder(userId: string, reminderNumber: number): Promise<Reminder | null> {
@@ -534,6 +598,12 @@ export class SupabaseDatabase implements Database {
     return isRow(data) ? noteFrom(data) : null;
   }
 
+  async listUserIds(): Promise<string[]> {
+    const { data, error } = await this.client.from("users").select("id");
+    this.raise(error);
+    return rows(data).map((row) => text(row, "id"));
+  }
+
   async listNotes(userId: string): Promise<Note[]> {
     const { data, error } = await this.client.from("notes").select("*").eq("user_id", userId).is("deleted_at", null).order("note_number");
     this.raise(error);
@@ -546,14 +616,28 @@ export class SupabaseDatabase implements Database {
     return rows(data).map(noteFrom);
   }
 
-  async linkNoteTask(noteId: string, taskId: string): Promise<void> {
-    const { error } = await this.client.from("note_tasks").upsert({ note_id: noteId, task_id: taskId });
+  async linkNoteTask(noteId: string, taskId: string): Promise<boolean> {
+    const existing = await this.client.from("note_tasks").select("note_id").eq("note_id", noteId).eq("task_id", taskId).maybeSingle();
+    this.raise(existing.error);
+    if (isRow(existing.data)) return false;
+    const { error } = await this.client.from("note_tasks").upsert(
+      { note_id: noteId, task_id: taskId },
+      { onConflict: "note_id,task_id", ignoreDuplicates: true },
+    );
     this.raise(error);
+    return true;
   }
 
-  async linkNoteDocument(noteId: string, documentId: string): Promise<void> {
-    const { error } = await this.client.from("note_documents").upsert({ note_id: noteId, document_id: documentId });
+  async linkNoteDocument(noteId: string, documentId: string): Promise<boolean> {
+    const existing = await this.client.from("note_documents").select("note_id").eq("note_id", noteId).eq("document_id", documentId).maybeSingle();
+    this.raise(existing.error);
+    if (isRow(existing.data)) return false;
+    const { error } = await this.client.from("note_documents").upsert(
+      { note_id: noteId, document_id: documentId },
+      { onConflict: "note_id,document_id", ignoreDuplicates: true },
+    );
     this.raise(error);
+    return true;
   }
 
   async insertKnowledge(input: NewKnowledge): Promise<KnowledgeEntry> {
@@ -662,6 +746,24 @@ export class SupabaseDatabase implements Database {
     return rows(data).map(documentFrom);
   }
 
+  async searchSavedText(userId: string, query: string): Promise<SavedTextHit[]> {
+    const { data, error } = await this.client.rpc("search_saved_text", { p_user: userId, p_query: query });
+    this.raise(error);
+    return rows(data).map((row) => {
+      const source = text(row, "source");
+      if (source !== "note" && source !== "knowledge" && source !== "document") {
+        throw new DatabaseError("Saved-text search returned an unknown source.");
+      }
+      return {
+        source,
+        sourceNumber: integer(row, "source_number"),
+        title: text(row, "title"),
+        excerpt: text(row, "excerpt"),
+        similarity: integer(row, "similarity"),
+      };
+    });
+  }
+
   async saveExtraction(extraction: Extraction): Promise<void> {
     const { error } = await this.client.from("document_extractions").upsert({
       document_id: extraction.documentId,
@@ -670,6 +772,64 @@ export class SupabaseDatabase implements Database {
       extracted_at: extraction.extractedAt,
     });
     this.raise(error);
+  }
+
+  async insertEquipment(input: NewEquipment): Promise<Equipment> {
+    const equipmentNumber = await this.allocate(input.userId, "equipment");
+    const { data, error } = await this.client
+      .from("equipment")
+      .insert({
+        user_id: input.userId,
+        equipment_number: equipmentNumber,
+        name: input.name,
+        kind: input.kind,
+        location: input.location,
+        ip_address: input.ipAddress,
+        notes: input.notes,
+        source_note_id: input.sourceNoteId,
+        source_document_id: input.sourceDocumentId,
+        created_at: input.createdAt,
+        updated_at: input.createdAt,
+      })
+      .select("*")
+      .single();
+    this.raise(error);
+    if (!isRow(data)) throw new DatabaseError("Could not save equipment.");
+    return equipmentFrom(data);
+  }
+
+  async updateEquipment(item: Equipment): Promise<Equipment> {
+    const { data, error } = await this.client
+      .from("equipment")
+      .update({
+        name: item.name,
+        kind: item.kind,
+        location: item.location,
+        ip_address: item.ipAddress,
+        notes: item.notes,
+        source_note_id: item.sourceNoteId,
+        source_document_id: item.sourceDocumentId,
+        updated_at: item.updatedAt,
+        deleted_at: item.deletedAt,
+      })
+      .eq("id", item.id)
+      .eq("user_id", item.userId)
+      .select("*")
+      .single();
+    this.raise(error);
+    if (!isRow(data)) throw new DatabaseError("Could not update equipment.");
+    return equipmentFrom(data);
+  }
+
+  async listEquipment(userId: string): Promise<Equipment[]> {
+    const { data, error } = await this.client
+      .from("equipment")
+      .select("*")
+      .eq("user_id", userId)
+      .is("deleted_at", null)
+      .order("equipment_number", { ascending: true });
+    this.raise(error);
+    return rows(data).map(equipmentFrom);
   }
 
   async getExtraction(documentId: string): Promise<Extraction | null> {
@@ -779,5 +939,105 @@ export class SupabaseDatabase implements Database {
       created_at: entry.createdAt,
     });
     this.raise(error);
+  }
+
+  async replaceChunks(userId: string, source: ChunkSource, sourceId: string, chunks: StoredChunk[]): Promise<void> {
+    const removed = await this.client.from("knowledge_chunks").delete().eq("user_id", userId).eq("source", source).eq("source_id", sourceId);
+    this.raise(removed.error);
+    if (chunks.length === 0) return;
+    const { error } = await this.client.from("knowledge_chunks").insert(
+      chunks.map((chunk) => ({
+        user_id: userId,
+        source: chunk.source,
+        source_id: chunk.sourceId,
+        source_number: chunk.sourceNumber,
+        title: chunk.title,
+        chunk_index: chunk.chunkIndex,
+        content: chunk.content,
+        chunk_type: chunk.chunkType,
+        embedding: chunk.embedding ? `[${chunk.embedding.join(",")}]` : null,
+        embedding_model: chunk.embeddingModel,
+        metadata: { chunk_type: chunk.chunkType, embedding_model: chunk.embeddingModel },
+      })),
+    );
+    this.raise(error);
+  }
+
+  async listChunks(userId: string, source: ChunkSource, sourceId: string): Promise<StoredChunk[]> {
+    const { data, error } = await this.client
+      .from("knowledge_chunks")
+      .select("source, source_id, source_number, title, chunk_index, chunk_type, content, embedding_model, metadata")
+      .eq("user_id", userId)
+      .eq("source", source)
+      .eq("source_id", sourceId)
+      .order("chunk_index", { ascending: true });
+    this.raise(error);
+    return rows(data).map((row) => {
+      const found = text(row, "source");
+      if (found !== "note" && found !== "knowledge" && found !== "document") {
+        throw new DatabaseError("Chunk row had an unknown source.");
+      }
+      return {
+        source: found,
+        sourceId: text(row, "source_id"),
+        sourceNumber: integer(row, "source_number"),
+        title: text(row, "title"),
+        chunkIndex: integer(row, "chunk_index"),
+        chunkType: text(row, "chunk_type") === "identifier" ? "identifier" : "narrative",
+        content: text(row, "content"),
+        embedding: null,
+        embeddingModel: textOrNull(row, "embedding_model"),
+        metadata: {
+          chunk_type: text(row, "chunk_type") === "identifier" ? "identifier" : "narrative",
+          embedding_model: textOrNull(row, "embedding_model"),
+        },
+      };
+    });
+  }
+
+  async searchChunks(userId: string, query: string, embedding: number[] | null, embeddingModel: string | null, limit: number): Promise<ChunkHit[]> {
+    // Production RPC. p_query is the question text, p_embedding is the query vector, p_limit is the match count.
+    const { data, error } = await this.client.rpc("hybrid_search_chunks", {
+      p_user: userId,
+      p_query: query,
+      p_embedding: embedding ? `[${embedding.join(",")}]` : null,
+      p_model: embeddingModel,
+      p_limit: limit,
+    });
+    this.raise(error);
+    return rows(data).map((row) => {
+      const source = text(row, "source");
+      if (source !== "note" && source !== "knowledge" && source !== "document") {
+        throw new DatabaseError("Chunk search returned an unknown source.");
+      }
+      const chunkType = text(row, "chunk_type") === "identifier" ? "identifier" : "narrative";
+      return {
+        source,
+        sourceId: text(row, "source_id"),
+        sourceNumber: integer(row, "source_number"),
+        title: text(row, "title"),
+        content: text(row, "content"),
+        chunkType,
+        lexical: real(row, "lexical"),
+        vectorScore: real(row, "vector_score"),
+        score: real(row, "score"),
+        metadata: { chunk_type: chunkType, embedding_model: textOrNull(row, "embedding_model") },
+      };
+    });
+  }
+
+  async listUsage(userId: string, fromInclusive: string, untilExclusive: string): Promise<UsageSlice[]> {
+    const { data, error } = await this.client
+      .from("ai_usage")
+      .select("model, input_tokens, output_tokens")
+      .eq("user_id", userId)
+      .gte("created_at", fromInclusive)
+      .lt("created_at", untilExclusive);
+    this.raise(error);
+    return rows(data).map((row) => ({
+      model: text(row, "model"),
+      inputTokens: integer(row, "input_tokens"),
+      outputTokens: integer(row, "output_tokens"),
+    }));
   }
 }

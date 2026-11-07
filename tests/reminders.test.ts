@@ -1,6 +1,7 @@
 import { DateTime } from "luxon";
 import { describe, expect, it } from "vitest";
 import { processDueReminders } from "../src/jobs/processReminders.js";
+import { applyReminderButton } from "../src/services/reminders/buttons.js";
 import { handleText } from "../src/services/assistant/handleText.js";
 import { advanceOccurrence } from "../src/services/reminders/schedule.js";
 import { fixedClock } from "../src/utils/time.js";
@@ -151,6 +152,55 @@ describe("reminders", () => {
     expect(calls).toBe(0);
   });
 
+  it("creates several reminders from one list and does not duplicate them", async () => {
+    const { deps, db } = testDeps();
+    const user = await owner(db);
+    const message = [
+      "Create reminders:",
+      "- Check the printer at 3 PM",
+      "- Call vendor tomorrow",
+      "- Replace UPS battery",
+    ].join("\n");
+    const reply = await handleText(deps, user, message);
+    expect(reply.text).toContain("Created 2 reminders:");
+    expect(reply.text).toContain("Check the printer — Fri 30 Oct 2026, 3:00 PM");
+    expect(reply.text).toContain("Call vendor — Sat 31 Oct 2026, 9:00 AM");
+    expect(reply.text).toContain("Replace UPS battery (no time set)");
+    expect(await db.listReminders(user.id)).toHaveLength(2);
+
+    const again = await handleText(deps, user, message);
+    expect(again.text).toContain("Already scheduled:");
+    expect(again.text).not.toContain("Created 2 reminders:");
+    expect(await db.listReminders(user.id)).toHaveLength(2);
+  });
+
+  it("schedules every reminder it can and asks only for a missing time", async () => {
+    const { deps, db } = testDeps();
+    const user = await owner(db);
+    const reply = await handleText(
+      deps,
+      user,
+      "Remind me to do the weekly Sunday speaker setup before 1 PM and the physical server check.",
+    );
+    expect(reply.text).toContain("Created 1 reminder:");
+    expect(reply.text).toContain("weekly Sunday speaker setup — Sun 1 Nov 2026, 1:00 PM");
+    expect(reply.text).toContain("physical server check (no time set)");
+    expect(reply.text).toContain("When should the physical server check happen?");
+    expect(reply.text).not.toContain("one reminder");
+    const saved = await db.listReminders(user.id);
+    expect(saved).toHaveLength(1);
+    expect(saved[0]?.kind).toBe("weekly");
+  });
+
+  it("keeps a single remind-me sentence on the one-reminder path", async () => {
+    const { deps, db } = testDeps();
+    const user = await owner(db);
+    const reply = await handleText(deps, user, "Remind me tomorrow at 9 AM to check the server backup.");
+    expect(reply.text).toContain("Scheduled reminder");
+    expect(reply.text).not.toContain("Created");
+    expect(await db.listReminders(user.id)).toHaveLength(1);
+  });
+
   it("cancels a reminder only after confirmation", async () => {
     const { deps, db } = testDeps();
     const user = await owner(db);
@@ -159,5 +209,49 @@ describe("reminders", () => {
     expect(ask.text).toContain("Reply YES");
     const done = await handleText(deps, user, "YES");
     expect(done.text).toContain("Cancelled reminder");
+  });
+
+  it("sends Done and Snooze buttons and updates the reminder from those taps", async () => {
+    const { deps, db } = testDeps();
+    const user = await owner(db);
+    const { reminder } = await db.insertReminder({
+      userId: user.id,
+      title: "Backup",
+      message: "Check the server backup",
+      kind: "once",
+      timezone: "Asia/Dubai",
+      nextRunAt: "2026-10-30T06:00:00.000Z",
+      weekdays: [],
+      intervalMinutes: null,
+      status: "active",
+      dedupeKey: "once|backup|buttons|",
+      createdAt: NOW,
+    });
+    const sent: Array<Array<{ label: string; data: string }> | undefined> = [];
+    await processDueReminders(deps, {
+      workerId: "buttons",
+      send: async (_id, _text, buttons) => {
+        sent.push(buttons);
+        return { messageId: 3 };
+      },
+    });
+    expect(sent[0]?.map((button) => button.label)).toEqual(["Done", "Snooze 1h"]);
+    expect(sent[0]?.[0]?.data).toBe(`r:done:${reminder.id}`);
+
+    const snoozed = await applyReminderButton(deps, user, "snooze", reminder.id);
+    expect(snoozed.editText).toContain("Snoozed until");
+    expect(snoozed.editText).toContain("11:00 AM");
+    expect((await db.findReminderById(reminder.id))?.status).toBe("active");
+
+    const finished = await applyReminderButton(deps, user, "done", reminder.id);
+    expect(finished.editText).toContain("Done.");
+    expect((await db.findReminderById(reminder.id))?.status).toBe("completed");
+
+    const again = await applyReminderButton(deps, user, "done", reminder.id);
+    expect(again.editText).toContain("Done.");
+    expect((await db.findReminderById(reminder.id))?.status).toBe("completed");
+
+    const missing = await applyReminderButton(deps, user, "snooze", "00000000-0000-4000-8000-000000000000");
+    expect(missing.editText).toBeNull();
   });
 });

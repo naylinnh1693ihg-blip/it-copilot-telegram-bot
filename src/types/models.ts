@@ -116,6 +116,24 @@ export interface DocumentRecord {
   deletedAt: string | null;
 }
 
+export type EquipmentKind = "printer" | "switch" | "access_point" | "other";
+
+export interface Equipment {
+  id: string;
+  userId: string;
+  equipmentNumber: number;
+  name: string;
+  kind: EquipmentKind;
+  location: string;
+  ipAddress: string;
+  notes: string;
+  sourceNoteId: string | null;
+  sourceDocumentId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
 export interface Extraction {
   documentId: string;
   text: string;

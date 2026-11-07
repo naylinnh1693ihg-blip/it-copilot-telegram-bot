@@ -3,6 +3,7 @@ import type {
   AuditEntry,
   ConversationTurn,
   DocumentRecord,
+  Equipment,
   Extraction,
   KnowledgeEntry,
   Note,
@@ -75,6 +76,73 @@ export interface NewDocument {
   createdAt: string;
 }
 
+export interface NewEquipment {
+  userId: string;
+  name: string;
+  kind: Equipment["kind"];
+  location: string;
+  ipAddress: string;
+  notes: string;
+  sourceNoteId: string | null;
+  sourceDocumentId: string | null;
+  createdAt: string;
+}
+
+export interface CompletedTask {
+  taskNumber: number;
+  title: string;
+  closedAt: string;
+}
+
+/** One ai_usage row. Cost is computed later so each request keeps its own model price. */
+export type ChunkSource = "note" | "knowledge" | "document";
+export type ChunkType = "narrative" | "identifier";
+
+export interface ChunkMetadata {
+  chunk_type: ChunkType;
+  embedding_model: string | null;
+}
+
+export interface StoredChunk {
+  source: ChunkSource;
+  sourceId: string;
+  sourceNumber: number;
+  title: string;
+  chunkIndex: number;
+  chunkType: ChunkType;
+  content: string;
+  embedding: number[] | null;
+  embeddingModel: string | null;
+  metadata: ChunkMetadata;
+}
+
+export interface ChunkHit {
+  source: ChunkSource;
+  sourceId: string;
+  sourceNumber: number;
+  title: string;
+  content: string;
+  chunkType: ChunkType;
+  lexical: number;
+  vectorScore: number;
+  score: number;
+  metadata: ChunkMetadata;
+}
+
+export interface UsageSlice {
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+export interface SavedTextHit {
+  source: "note" | "knowledge" | "document";
+  sourceNumber: number;
+  title: string;
+  excerpt: string;
+  similarity: number;
+}
+
 export interface Database {
   ping(): Promise<{ ok: boolean; reason: string }>;
   upsertFromTelegram(input: {
@@ -94,9 +162,15 @@ export interface Database {
   searchTasks(userId: string, query: string): Promise<Task[]>;
   addTaskEvent(event: Omit<TaskEvent, "id">): Promise<void>;
   listTaskEvents(userId: string, taskNumber: number): Promise<TaskEvent[]>;
+  /**
+   * Completed events in [fromInclusive, untilExclusive), oldest first.
+   * Callers pass the user's local midnight and the next local midnight.
+   */
+  listCompletedTasks(userId: string, fromInclusive: string, untilExclusive: string): Promise<CompletedTask[]>;
   insertReminder(input: NewReminder): Promise<{ reminder: Reminder; created: boolean }>;
   updateReminder(reminder: Reminder): Promise<Reminder>;
   findReminder(userId: string, reminderNumber: number): Promise<Reminder | null>;
+  findReminderById(id: string): Promise<Reminder | null>;
   listReminders(userId: string): Promise<Reminder[]>;
   claimDueReminders(worker: string, limit: number, lockSeconds: number, nowIso: string): Promise<Reminder[]>;
   startDelivery(reminderId: string, occurrenceAt: string, nowIso: string): Promise<{ action: "send" | "skip"; attempt: number }>;
@@ -112,9 +186,12 @@ export interface Database {
   updateNote(note: Note): Promise<Note>;
   findNote(userId: string, noteNumber: number): Promise<Note | null>;
   listNotes(userId: string): Promise<Note[]>;
+  listUserIds(): Promise<string[]>;
   searchNotes(userId: string, query: string): Promise<Note[]>;
-  linkNoteTask(noteId: string, taskId: string): Promise<void>;
-  linkNoteDocument(noteId: string, documentId: string): Promise<void>;
+  /** Inserts the pair. Returns false when that pair is already stored. */
+  linkNoteTask(noteId: string, taskId: string): Promise<boolean>;
+  /** Inserts the pair. Returns false when that pair is already stored. */
+  linkNoteDocument(noteId: string, documentId: string): Promise<boolean>;
   insertKnowledge(input: NewKnowledge): Promise<KnowledgeEntry>;
   listKnowledge(userId: string): Promise<KnowledgeEntry[]>;
   searchKnowledge(userId: string, query: string): Promise<KnowledgeEntry[]>;
@@ -124,6 +201,10 @@ export interface Database {
   findDocumentByHash(userId: string, sha256: string): Promise<DocumentRecord | null>;
   listDocuments(userId: string): Promise<DocumentRecord[]>;
   searchDocuments(userId: string, query: string): Promise<DocumentRecord[]>;
+  searchSavedText(userId: string, query: string): Promise<SavedTextHit[]>;
+  insertEquipment(input: NewEquipment): Promise<Equipment>;
+  updateEquipment(item: Equipment): Promise<Equipment>;
+  listEquipment(userId: string): Promise<Equipment[]>;
   saveExtraction(extraction: Extraction): Promise<void>;
   getExtraction(documentId: string): Promise<Extraction | null>;
   claimUpdate(updateId: number, telegramUserId: number | null, at: string): Promise<boolean>;
@@ -134,4 +215,9 @@ export interface Database {
   recentTurns(userId: string, limit: number): Promise<ConversationTurn[]>;
   writeAudit(entry: Omit<AuditEntry, "id">): Promise<void>;
   recordUsage(entry: Omit<UsageEntry, "id">): Promise<void>;
+  /** Usage in [fromInclusive, untilExclusive). One entry per stored request. */
+  listUsage(userId: string, fromInclusive: string, untilExclusive: string): Promise<UsageSlice[]>;
+  replaceChunks(userId: string, source: ChunkSource, sourceId: string, chunks: StoredChunk[]): Promise<void>;
+  listChunks(userId: string, source: ChunkSource, sourceId: string): Promise<StoredChunk[]>;
+  searchChunks(userId: string, query: string, embedding: number[] | null, embeddingModel: string | null, limit: number): Promise<ChunkHit[]>;
 }

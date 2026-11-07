@@ -7,7 +7,7 @@ import { redactString } from "../utils/text.js";
 export function createHttpApp(
   deps: Deps,
   options: {
-    sendTelegram?: (telegramUserId: number, text: string) => Promise<{ messageId: number }>;
+    sendTelegram?: (telegramUserId: number, text: string, buttons?: Array<{ label: string; data: string }>) => Promise<{ messageId: number }>;
     webhook?: RequestHandler;
   } = {},
 ): express.Express {

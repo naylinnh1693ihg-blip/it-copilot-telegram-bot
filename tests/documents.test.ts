@@ -7,6 +7,7 @@ import { detectFile } from "../src/services/documents/files.js";
 import { MemoryStorage } from "../src/services/documents/storage.js";
 import { downloadTelegramFile } from "../src/services/documents/telegramDownload.js";
 import { extractDocumentText } from "../src/services/documents/documentProcessor.js";
+import { imageToVisionInput, pdfPagesForVision, shouldUseVision } from "../src/services/documents/vision.js";
 import { handleText } from "../src/services/assistant/handleText.js";
 import { AppError } from "../src/utils/errors.js";
 import { owner, testDeps } from "./helpers.js";
@@ -38,7 +39,10 @@ describe("documents", () => {
     const again = await saveDocument(deps, user, { filename: "copy.xlsx", declaredMime: "application/octet-stream", buffer, title: "copy" });
     expect(again.duplicate).toBe(true);
     const found = await handleText(deps, user, "Search my documents for VLAN");
+    expect(found.text).toContain("Found in documents:");
     expect(found.text).toContain("Hotel VLAN sheet");
+    const inDocs = await handleText(deps, user, "Find in docs: VLAN");
+    expect(inDocs.text).toContain("Hotel VLAN sheet");
     const missing = await handleText(deps, user, "Search my documents for a firewall rule that was never saved");
     expect(missing.text).toContain("don't have");
   });
@@ -145,9 +149,12 @@ describe("documents", () => {
     expect(jpegText.text).toBe("JPEG OCR text");
 
     const longText = `BEGIN\n${"important middle text\n".repeat(6_000)}END`;
-    const extracted = await extractDocumentText("txt", Buffer.from(longText));
+    const extracted = await extractDocumentText("txt", Buffer.from(longText), { maxChars: 100_000 });
     expect(extracted.truncated).toBe(true);
     expect(extracted.text.length).toBeLessThanOrEqual(100_000);
+    const medium = await extractDocumentText("txt", Buffer.from("A".repeat(200_000)));
+    expect(medium.truncated).toBe(false);
+    expect(medium.text.length).toBe(200_000);
     expect(extracted.text).toContain("Middle of extracted text omitted");
     expect(extracted.text.startsWith("BEGIN")).toBe(true);
     expect(extracted.text.endsWith("END")).toBe(true);
@@ -177,6 +184,57 @@ describe("documents", () => {
       expect(error).toBeInstanceOf(AppError);
       expect((error as AppError).userMessage).not.toContain(token);
     }
+  });
+});
+
+describe("vision images", () => {
+  it("uses vision for photos and scanned PDFs, and keeps text PDFs on the text path", () => {
+    expect(shouldUseVision("image/png", "")).toBe(true);
+    expect(shouldUseVision("image/jpeg", "some OCR text")).toBe(true);
+    expect(shouldUseVision("application/pdf", "   ")).toBe(true);
+    expect(shouldUseVision("application/pdf", "This contract has enough extracted text to summarize from the words alone, without rendering its pages as images.")).toBe(false);
+    expect(shouldUseVision("image/png", "", "ocr")).toBe(false);
+    expect(shouldUseVision("image/png", "OCR text", "vision")).toBe(true);
+  });
+
+  it("converts a PNG into a JPEG small enough for Grok", async () => {
+    const image = await imageToVisionInput(PNG);
+    expect(image.mime).toBe("image/jpeg");
+    expect(image.data.subarray(0, 2).toString("hex")).toBe("ffd8");
+    expect(image.data.length).toBeLessThan(20 * 1024 * 1024);
+  });
+
+  it("renders a scanned PDF page as a JPEG for Grok", async () => {
+    const pdf = Buffer.from(`%PDF-1.1
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R >> endobj
+4 0 obj << /Length 8 >> stream
+q Q
+endstream endobj
+xref
+0 5
+0000000000 65535 f 
+0000000010 00000 n 
+0000000060 00000 n 
+0000000117 00000 n 
+0000000216 00000 n 
+trailer << /Size 5 /Root 1 0 R >>
+startxref
+274
+%%EOF`);
+    const rendered = await pdfPagesForVision(pdf);
+    expect(rendered.images).toHaveLength(1);
+    expect(rendered.images[0]?.mime).toBe("image/jpeg");
+    expect(rendered.images[0]?.data.subarray(0, 2).toString("hex")).toBe("ffd8");
+    expect(rendered.note).toBe("");
+  });
+
+  it("reloads a stored file for later image analysis", async () => {
+    const storage = new MemoryStorage();
+    await storage.upload("user/photo.jpg", PNG, "image/png");
+    expect(Buffer.compare(await storage.download("user/photo.jpg"), PNG)).toBe(0);
+    await expect(storage.download("missing")).rejects.toThrow(/Missing stored file/);
   });
 });
 
