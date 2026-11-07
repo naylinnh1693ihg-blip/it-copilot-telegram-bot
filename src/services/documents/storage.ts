@@ -7,6 +7,7 @@ export const SIGNED_URL_SECONDS = 600;
 
 export interface ObjectStorage {
   upload(path: string, body: Buffer, contentType: string): Promise<void>;
+  download(path: string): Promise<Buffer>;
   remove(path: string): Promise<void>;
   signedUrl(path: string, ttlSeconds: number): Promise<string>;
 }
@@ -18,8 +19,14 @@ export class MemoryStorage implements ObjectStorage {
     return this.objects.has(path);
   }
 
-  async upload(path: string, body: Buffer): Promise<void> {
+  async upload(path: string, body: Buffer, _contentType: string): Promise<void> {
     this.objects.set(path, Buffer.from(body));
+  }
+
+  async download(path: string): Promise<Buffer> {
+    const body = this.objects.get(path);
+    if (!body) throw new Error(`Missing stored file: ${path}`);
+    return Buffer.from(body);
   }
 
   async remove(path: string): Promise<void> {
@@ -40,6 +47,11 @@ export function createSupabaseStorage(client: SupabaseClient): ObjectStorage {
         upsert: false,
       });
       if (error) throw new DatabaseError(redactString(error.message));
+    },
+    async download(path) {
+      const { data, error } = await client.storage.from(DOCUMENT_BUCKET).download(path);
+      if (error || !data) throw new DatabaseError(redactString(error?.message ?? "Could not download the stored file."));
+      return Buffer.from(await data.arrayBuffer());
     },
     async remove(path) {
       const { error } = await client.storage.from(DOCUMENT_BUCKET).remove([path]);
