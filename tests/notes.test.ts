@@ -147,7 +147,7 @@ describe("notes and knowledge", () => {
     await db.insertNote({
       userId: user.id,
       title: "PC directory",
-      content: "PC name;Extension;User HADXBPLDT15KH;6603/0;GUEST SERVICE PC1 HADXBPLNBJHFL;6722;Nay HADXBPLDT15KT;6625;DUTY MANAGER - Fayaz",
+      content: "PC name;Extension;User HADXBPLDT15KH;6603/0;GUEST SERVICE PC1 HADXBPLLTBJ4Z;6670;VInay HADXBPLNBJHFL;6722;Nay HADXBPLDT15KT;6625;DUTY MANAGER - Fayaz",
       category: "",
       tags: [],
       createdAt: "2026-10-30T10:00:00.000+04:00",
@@ -156,6 +156,7 @@ describe("notes and knowledge", () => {
     const reply = await handleText(deps, user, "What is the extension for Nay?");
     expect(reply.text).toContain("6722");
     expect(reply.text).toContain("Nay");
+    expect(reply.text).not.toContain("VInay");
     expect(reply.text).not.toContain("GUEST SERVICE");
     expect(reply.text).not.toContain("DUTY MANAGER");
     expect(reply.text).not.toContain("Faizan");

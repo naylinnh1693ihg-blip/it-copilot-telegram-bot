@@ -483,10 +483,14 @@ export async function execute(
       const notes = exactSingleTermMatches(await deps.db.searchNotes(user.id, query), query, (note) => `${note.title}\n${note.content}`);
       const knowledge = exactSingleTermMatches(await deps.db.searchKnowledge(user.id, query), query, (entry) => `${entry.title}\n${entry.content}`);
       if (notes.length === 0 && knowledge.length === 0) return { text: `I don't have anything saved about "${query}".` };
-      const lines = [
+      let lines = [
         ...notes.map((note) => formatSearchResult("Note", note.noteNumber, note.content, query)),
         ...knowledge.map((entry) => formatSearchResult(`Knowledge ${entry.entryNumber} (${entry.category})`, entry.entryNumber, entry.content, query)),
       ];
+      if (intent.tags === "extension") {
+        const numbered = lines.filter((line) => /\b\d{3,5}(?:[/\\]\d+)?\b/.test(line));
+        if (numbered.length > 0) lines = numbered;
+      }
       if (intent.tags === "summarize" && deps.llm) {
         const summary = await guardedText(deps, user, "summarize_records", summaryPrompt(lines.join("\n")), lines.join("\n"));
         if (summary) return { text: `${summary}\n\nSources:\n${lines.join("\n")}` };

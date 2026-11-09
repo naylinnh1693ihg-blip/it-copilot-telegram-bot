@@ -91,7 +91,7 @@ export function focusTabularRecord(content: string, question: string): string | 
   const table = parseSemicolonTable(content);
   if (!table) return null;
   const tokens = queryTokens(question);
-  const matched = table.rows.filter((row) => tokens.every((token) => row.join(" ").toLowerCase().includes(token)));
+  const matched = table.rows.filter((row) => rowMatches(row.join(" "), tokens));
   if (tokens.length === 0 || matched.length === 0) {
     const names = table.rows.map((row) => row[0]?.trim() ?? "").filter(Boolean);
     if (names.length === 0) return null;
@@ -122,8 +122,8 @@ export function focusDirectoryRecord(content: string, question: string): string 
     const pc = match[1]?.trim() ?? "";
     const extension = match[2]?.trim() ?? "";
     const user = match[3]?.trim() ?? "";
-    const blob = `${pc} ${extension} ${user}`.toLowerCase();
-    if (!pc || !extension || !user || !tokens.every((token) => blob.includes(token))) continue;
+    const blob = `${pc} ${extension} ${user}`;
+    if (!pc || !extension || !user || !rowMatches(blob, tokens)) continue;
     hits.push(`PC name: ${pc}\nExtension: ${extension}\nUser: ${user}`);
   }
 
@@ -219,6 +219,14 @@ function formatTableRow(headers: string[], row: string[]): string {
     })
     .filter(Boolean)
     .join("\n");
+}
+
+function rowMatches(text: string, tokens: string[]): boolean {
+  return tokens.every((token) => {
+    if (/^\d/.test(token) || token.includes(".")) return text.toLowerCase().includes(token);
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`\\b${escaped}\\b`, "i").test(text);
+  });
 }
 
 function queryTokens(question: string): string[] {
