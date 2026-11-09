@@ -79,6 +79,26 @@ describe("notes and knowledge", () => {
     expect(list.text).toContain("• Floor2");
     expect(list.text).not.toContain("slaveTerminalID");
     expect(list.text).not.toContain("10.1.1.10");
+
+    const wideHeader = `${header};B&W copies;Color copies`;
+    await db.insertNote({
+      userId: user.id,
+      title: "metered printers",
+      content: [
+        wideHeader,
+        "BOH;Back Office House;10.100.12.223;;789;;;;;;SHARP MX-3051;1510943600;AC-A8-8E-F7-AA-97;206248;46347;8074",
+        "Kitchen;Kitchen -B4;10.100.12.237;;;;;;;;P-4026iw MFP;VNU4139887;D4-F0-C9-0D-E0-FB",
+      ].join("\n"),
+      category: "",
+      tags: [],
+      createdAt: "2026-10-30T10:00:00.000+04:00",
+    });
+    const wide = await execute(deps, user, blankIntent({ intent: "search_notes", search_query: "10.100.12.223" }), { confirmed: false });
+    expect(wide.text).toContain("printer: BOH");
+    expect(wide.text).toContain("Serial number: 1510943600");
+    expect(wide.text).toContain("B&W print: 206248");
+    expect(wide.text).toContain("B&W copies: 8074");
+    expect(wide.text).not.toContain("Kitchen");
   });
 
   it("returns the matching employee row instead of full employee and PC lists", async () => {

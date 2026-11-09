@@ -195,9 +195,12 @@ function expandCell(cell: string): string[] {
 function takeHeaders(cells: string[]): string[] {
   const headers: string[] = [];
   for (const cell of cells) {
-    if (!TABLE_HEADERS.has(headerKey(cell))) break;
+    if (!cell.trim() || !TABLE_HEADERS.has(headerKey(cell))) break;
     headers.push(cell);
   }
+  const all = cells.map((cell) => cell.trim());
+  while (all.length > 0 && !all[all.length - 1]) all.pop();
+  if (headers.length >= 3 && headers.length < all.length) return all;
   return headers;
 }
 
