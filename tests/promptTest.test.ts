@@ -37,7 +37,7 @@ describe("rag prompt tester", () => {
     const printed = formatPromptRun(result, false);
     expect(printed).toContain("RAG context: yes");
     expect(printed).toContain("192.168.1.10");
-    expect(printed).toContain("Sources: Note #14");
+    expect(printed).toContain("From note #14");
     expect(printed).toContain("Tokens: in=12 out=4");
 
     const fallback = await runRagPrompt({
@@ -46,7 +46,7 @@ describe("rag prompt tester", () => {
       context: null,
     });
     expect(fallback.ragUsed).toBe(false);
-    expect(formatPromptRun(fallback, false)).toContain("Sources: (none)");
+    expect(formatPromptRun(fallback, false)).toContain("From: (none)");
   });
 
   it("reports a failed Grok call without throwing", async () => {

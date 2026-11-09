@@ -30,6 +30,7 @@ const schema = z.object({
   DOCUMENT_EXTRACT_MAX_CHARS: z.coerce.number().int().min(10_000).max(800_000).default(600_000),
   XAI_BASE_URL: z.string().url().default("https://api.x.ai/v1"),
   XAI_TIMEOUT_MS: z.coerce.number().int().positive().default(45_000),
+  XAI_LONG_CONTEXT_TIMEOUT_MS: z.coerce.number().int().min(45_000).max(120_000).default(90_000),
   XAI_INPUT_USD_PER_MILLION: z.coerce.number().nonnegative().default(2),
   XAI_OUTPUT_USD_PER_MILLION: z.coerce.number().nonnegative().default(6),
   SUPABASE_URL: z.string().default(""),

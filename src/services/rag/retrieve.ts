@@ -26,6 +26,7 @@ export async function answerWithRag(
   onPreview?: (plainText: string) => Promise<void>,
 ): Promise<Reply | null> {
   try {
+    if (onPreview) await onPreview("Searching…");
     const hits = await hybridSearch(deps, user.id, question);
     const config = ragConfig(deps.env);
     const built = buildRagContext(deps.logger, hits, question, { maxTokens: config.contextTokens, minScore: config.minScore });
@@ -46,13 +47,11 @@ export async function answerWithRag(
     const [systemMessage, userMessage] = prompt.messages;
     const system = systemMessage?.content ?? prompt.system;
     const userText = userMessage?.content ?? prompt.user;
-    if (onPreview) await onPreview("Searching…");
     const result = deps.llm.streamText
       ? await deps.llm.streamText({
           system,
           user: userText,
           minIntervalMs: deps.env.TELEGRAM_EDIT_INTERVAL_MS,
-          onDelta: onPreview,
         })
       : await deps.llm.completeText({ system, user: userText });
     await deps.db.recordUsage({
@@ -68,7 +67,7 @@ export async function answerWithRag(
     }).catch(() => undefined);
 
     const answer = result.text.trim();
-    if (!answer || /don'?t know|not in the (retrieved )?records|no information|not in the knowledge base/i.test(answer)) {
+    if (!answer || /^(?:i\s+(?:don't|do not)\s+know(?:\s+that)?|(?:there\s+is\s+)?no\s+information(?:\s+available)?|(?:this\s+is\s+)?not\s+in\s+the\s+(?:retrieved\s+)?records|not\s+in\s+the\s+knowledge\s+base)[.!]?$/i.test(answer)) {
       return { text: "I don't know that from your notes and documents." };
     }
     if (introducedNetworkFacts(built.context, answer).length > 0) {

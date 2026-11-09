@@ -12,13 +12,13 @@ export const PROMPT_CASES: PromptCase[] = [
     name: "ip",
     question: "What's the IP of the floor 2 printer?",
     context: ["[1] Note #14 (narrative)", "The meeting room printer on floor 2 is an HP LaserJet at 192.168.1.10."].join("\n"),
-    sourcesLine: "Sources: Note #14",
+    sourcesLine: "From note #14",
   },
   {
     name: "document",
     question: "What address does the core switch use?",
     context: ["[1] Document: Network-Map.pdf (identifier)", "Switch-Core IP: 10.0.0.1"].join("\n"),
-    sourcesLine: "Sources: Document: Network-Map.pdf",
+    sourcesLine: "From document Network-Map.pdf",
   },
   {
     name: "fallback",
@@ -36,13 +36,13 @@ export const PROMPT_CASES: PromptCase[] = [
       "[2] Note #14 (identifier)",
       "Floor 2 printer hostname: printer-floor2. Address: 192.168.1.10. Model: HP LaserJet M404.",
     ].join("\n"),
-    sourcesLine: "Sources: Note #14",
+    sourcesLine: "From note #14",
   },
   {
     name: "howto",
     question: "How do I put a laptop on the guest network?",
     context: ["[1] Knowledge: Guest VLAN (narrative)", "Connect the laptop to the guest SSID. The guest network is VLAN 20."].join("\n"),
-    sourcesLine: "Sources: Knowledge: Guest VLAN",
+    sourcesLine: "From knowledge Guest VLAN",
   },
 ];
 

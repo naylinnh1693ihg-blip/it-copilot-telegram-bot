@@ -64,6 +64,31 @@ describe("grok client", () => {
     expect(server).toBe(2);
   });
 
+  it("uses a per-request timeout and can suppress retries for costly analysis", async () => {
+    let calls = 0;
+    let requestOptions: { timeout?: number } | undefined;
+    const client = createResilientClient({
+      model: "grok-4.7",
+      sleep: async () => undefined,
+      create: async (_body, options) => {
+        calls += 1;
+        requestOptions = options;
+        throw Object.assign(new Error("timeout"), { status: 503 });
+      },
+    });
+
+    await expect(client.completeStructured({
+      system: "Analyze.",
+      user: "long document",
+      schemaName: "document_analysis",
+      schema: { type: "object" },
+      timeoutMs: 90_000,
+      retry: false,
+    })).rejects.toBeInstanceOf(GrokError);
+    expect(requestOptions).toEqual({ timeout: 90_000 });
+    expect(calls).toBe(1);
+  });
+
   it("requests xAI's built-in web search tool only when requested", async () => {
     let request: Record<string, unknown> | undefined;
     const client = createResilientClient({
@@ -155,6 +180,33 @@ describe("grok client", () => {
       { type: "input_image", image_url: "data:image/jpeg;base64,abc", detail: "high" },
       { type: "input_text", text: "contract" },
     ]);
+  });
+
+  it("applies long-context timeout and retry policy to streamed requests", async () => {
+    let attempts = 0;
+    let requestOptions: { timeout?: number } | undefined;
+    const client = createResilientClient({
+      model: "grok-4.7",
+      create: async () => {
+        throw new Error("stream path should be used");
+      },
+      stream: async function* (_body, options) {
+        attempts += 1;
+        requestOptions = options;
+        yield { type: "response.failed", errorMessage: "timeout" };
+      },
+    });
+
+    await expect(client.streamStructured?.({
+      system: "Analyze.",
+      user: "long document",
+      schemaName: "document_analysis",
+      schema: { type: "object" },
+      timeoutMs: 90_000,
+      retry: false,
+    })).rejects.toBeInstanceOf(GrokError);
+    expect(requestOptions).toEqual({ timeout: 90_000 });
+    expect(attempts).toBe(1);
   });
 
   it("returns custom function calls and keeps store off when tools are enabled", async () => {
@@ -272,7 +324,7 @@ describe("grok client", () => {
     expect(prompt).toContain("untrusted_record_1");
     expect(prompt).toContain("untrusted_question");
     expect(reply.text).toContain("static IP");
-    expect(reply.text).toContain("Sources: Note #1");
+    expect(reply.text).toContain("From note #1");
     expect(await db.searchSavedText(user.id, "Git documentation")).toEqual([]);
   });
 

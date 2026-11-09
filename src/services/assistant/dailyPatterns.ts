@@ -111,7 +111,17 @@ export function matchWeekCost(plain: string): Intent | null {
   return null;
 }
 
-export const DAILY_MATCHERS: DailyMatcher[] = [matchClosedToday, matchWeekCost, matchTaskList, matchSaveNote];
+/** "What is the extension for Nay?", "extension for Fayaz", "what's Nay's extension?". */
+export function matchExtensionLookup(plain: string): Intent | null {
+  const direct = plain.match(/^(?:please\s+)?(?:what(?:'s| is|s)\s+)?(?:the\s+)?(?:extension|ext)(?:\s+number)?\s+(?:for|of)\s+(.+)$/i);
+  const possessive = plain.match(/^(?:please\s+)?what(?:'s| is|s)\s+(.+?)(?:'s)?\s+(?:extension|ext)(?:\s+number)?$/i);
+  const who = plain.match(/^(?:please\s+)?who(?:'s| is)?\s+(?:on\s+)?(?:extension|ext)\s+(.+)$/i);
+  const name = (direct?.[1] ?? possessive?.[1] ?? who?.[1] ?? "").replace(/[?.!]+$/g, "").trim();
+  if (!name || name.length > 80) return null;
+  return blankIntent({ intent: "search_notes", search_query: name, tags: "extension" });
+}
+
+export const DAILY_MATCHERS: DailyMatcher[] = [matchClosedToday, matchWeekCost, matchExtensionLookup, matchTaskList, matchSaveNote];
 
 export function matchDailyIntent(plain: string): Intent | null {
   for (const match of DAILY_MATCHERS) {

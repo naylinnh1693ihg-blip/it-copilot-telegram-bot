@@ -7,6 +7,11 @@ export interface LlmResult {
   outputTokens: number;
 }
 
+export interface LlmRequestPolicy {
+  timeoutMs?: number;
+  retry?: boolean;
+}
+
 export interface ToolCall {
   callId: string;
   name: string;
@@ -25,6 +30,8 @@ export interface LlmClient {
     schema: Record<string, unknown>;
     images?: Array<{ mime: "image/jpeg" | "image/png"; base64: string }>;
     model?: string;
+    timeoutMs?: number;
+    retry?: boolean;
   }): Promise<LlmResult>;
   completeText(input: {
     system: string;
@@ -50,6 +57,8 @@ export interface LlmClient {
     /** How often a preview may be published. Defaults to 1100ms. */
     minIntervalMs?: number;
     onDelta?: (snapshot: string) => Promise<void> | void;
+    timeoutMs?: number;
+    retry?: boolean;
   }): Promise<LlmResult>;
   /** Plain-text stream. Previews are throttled. The returned text is the full answer. */
   streamText?(input: {
@@ -70,11 +79,11 @@ export interface ResponseStreamEvent {
 }
 
 export interface ResponseStreamCreate {
-  (body: Record<string, unknown>): AsyncIterable<ResponseStreamEvent>;
+  (body: Record<string, unknown>, options?: { timeout?: number }): AsyncIterable<ResponseStreamEvent>;
 }
 
 export interface ResponseCreate {
-  (body: Record<string, unknown>): Promise<{
+  (body: Record<string, unknown>, options?: { timeout?: number }): Promise<{
     output_text?: string | null;
     usage?: { input_tokens?: number; output_tokens?: number } | null;
     output?: unknown;
@@ -120,10 +129,14 @@ export function createResilientClient(options: {
 }): LlmClient {
   const sleep = options.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
 
-  async function call(body: Record<string, unknown>, expectJson: boolean): Promise<LlmResult> {
+  async function call(
+    body: Record<string, unknown>,
+    expectJson: boolean,
+    policy: LlmRequestPolicy = {},
+  ): Promise<LlmResult> {
     const attempt = async (): Promise<LlmResult> => {
       try {
-        const response = await options.create(body);
+        const response = await options.create(body, policy.timeoutMs ? { timeout: policy.timeoutMs } : undefined);
         const text = response.output_text?.trim() ?? "";
         if (!text) throw new GrokError("The model returned an empty response.", true);
         if (expectJson) {
@@ -147,7 +160,7 @@ export function createResilientClient(options: {
       return await attempt();
     } catch (error) {
       const grokError = asGrokError(error);
-      if (!grokError.retryable) throw grokError;
+      if (policy.retry === false || !grokError.retryable) throw grokError;
       await sleep(400);
       return attempt();
     }
@@ -176,7 +189,13 @@ export function createResilientClient(options: {
 
   async function readStream(
     request: Record<string, unknown>,
-    hooks: { expectJson: boolean; minIntervalMs?: number; onDelta?: (snapshot: string) => Promise<void> | void },
+    hooks: {
+      expectJson: boolean;
+      minIntervalMs?: number;
+      onDelta?: (snapshot: string) => Promise<void> | void;
+      timeoutMs?: number;
+      retry?: boolean;
+    },
   ): Promise<LlmResult> {
     const read = async (): Promise<LlmResult> => {
       let text = "";
@@ -187,7 +206,10 @@ export function createResilientClient(options: {
         publish: (snapshot) => hooks.onDelta?.(snapshot),
       });
       try {
-        for await (const event of options.stream!(request)) {
+        for await (const event of options.stream!(
+          request,
+          hooks.timeoutMs ? { timeout: hooks.timeoutMs } : undefined,
+        )) {
           if (event.type === "response.output_text.delta" && event.delta) {
             text += event.delta;
             await gate.push(text);
@@ -218,7 +240,7 @@ export function createResilientClient(options: {
       return await read();
     } catch (error) {
       const grokError = asGrokError(error);
-      if (!grokError.retryable) throw grokError;
+      if (hooks.retry === false || !grokError.retryable) throw grokError;
       await sleep(400);
       return read();
     }
@@ -239,6 +261,7 @@ export function createResilientClient(options: {
           },
         },
         true,
+        { timeoutMs: input.timeoutMs, retry: input.retry },
       );
     },
     async streamStructured(input) {
@@ -253,11 +276,15 @@ export function createResilientClient(options: {
           },
         },
       };
-      if (!options.stream) return call(request, true);
+      if (!options.stream) {
+        return call(request, true, { timeoutMs: input.timeoutMs, retry: input.retry });
+      }
       return readStream({ ...request, stream: true }, {
         expectJson: true,
         minIntervalMs: input.minIntervalMs,
         onDelta: input.onDelta,
+        timeoutMs: input.timeoutMs,
+        retry: input.retry,
       });
     },
     async streamText(input) {

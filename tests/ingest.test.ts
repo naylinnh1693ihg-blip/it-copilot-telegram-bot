@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { GrokError } from "../src/utils/errors.js";
-import { ingestKnowledge } from "../src/services/rag/ingest.js";
+import { ingestKnowledge, ingestSource } from "../src/services/rag/ingest.js";
 import { NOW, owner, testDeps } from "./helpers.js";
 
 function vector(): number[] {
@@ -109,5 +109,38 @@ describe("knowledge ingest", () => {
     expect(counts.processed).toBe(1);
     expect(counts.failed).toBe(1);
     expect(guestCalls).toBe(3);
+  });
+
+  it("embeds long documents in bounded batches and omits redundant identifier chunks", async () => {
+    const { deps, db } = testDeps();
+    const batchSizes: number[] = [];
+    deps.llm = {
+      async completeStructured() {
+        throw new Error("unused");
+      },
+      async completeText() {
+        throw new Error("unused");
+      },
+      async embed(input) {
+        batchSizes.push(input.texts.length);
+        return { vectors: input.texts.map(() => vector()), inputTokens: input.texts.length * 800 };
+      },
+    };
+
+    const result = await ingestSource(deps, {
+      userId: (await owner(db)).id,
+      source: "document",
+      sourceId: "document-1",
+      sourceNumber: 1,
+      title: "Large network guide",
+      text: `${"The site has several network closets and access switches. ".repeat(10_000)}Core switch IP: 10.1.2.3.`,
+    });
+
+    expect(result.status).toBe("processed");
+    expect(result.narrative).toBeLessThan(200);
+    expect(result.identifier).toBe(0);
+    expect(batchSizes.length).toBeLessThanOrEqual(7);
+    expect(batchSizes.every((size) => size <= 32)).toBe(true);
+    expect(batchSizes.reduce((sum, size) => sum + size, 0)).toBe(result.narrative);
   });
 });

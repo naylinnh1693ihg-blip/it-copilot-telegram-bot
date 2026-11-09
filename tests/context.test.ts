@@ -61,7 +61,7 @@ describe("rag context", () => {
     expect(built.context).toContain("10.0.0.1");
     expect(built.context).not.toContain("password");
     expect(built.sources).toEqual(["Note #14", "Document: Network-Map.pdf"]);
-    expect(built.sourcesLine).toBe("Sources: Note #14, Document: Network-Map.pdf");
+    expect(built.sourcesLine).toBe("From note #14 and document Network-Map.pdf");
     expect(built.tokens).toBeLessThanOrEqual(80);
     expect(events).toEqual([`${built.chunks}:${built.tokens}`]);
 
@@ -79,5 +79,28 @@ describe("rag context", () => {
     expect(built.context).toBe("");
     expect(built.sourcesLine).toBe("");
     expect(buildRagPrompt(silentLogger, [], "Where is the spare keyboard?").relevant).toBe(false);
+  });
+
+  it("focuses a pipe-delimited note on the uniquely matching network fact", () => {
+    const built = buildRagContext(
+      silentLogger,
+      [
+        match({
+          content:
+            "GRMS is VLAN 21 <172.21.4.0/22> | Meraki MGMT is VLAN 42 <172.42.8.0/24> | Staff_WLAN Digital Signage is VLAN 32 <172.32.8.0/24>",
+          sourceNumber: 7,
+          title: "Network VLANs",
+          score: 0.95,
+        }),
+      ],
+      "What is Meraki MGMT VLAN?",
+      { maxTokens: 80, minScore: 0.4 },
+    );
+
+    expect(built.context).toContain("Meraki MGMT is VLAN 42 <172.42.8.0/24>");
+    expect(built.context).not.toContain("GRMS");
+    expect(built.context).not.toContain("Staff_WLAN");
+    expect(built.included[0]?.content).toBe("Meraki MGMT is VLAN 42 <172.42.8.0/24>");
+    expect(built.sourcesLine).toBe("From note #7");
   });
 });

@@ -128,8 +128,15 @@ describe("reminders", () => {
 
   it("does not message a telegram user who has not started the bot", async () => {
     const { deps, db } = testDeps();
-    await db.insertReminder({
-      userId: "missing-user",
+    const user = await db.upsertFromTelegram({
+      telegramUserId: 99,
+      displayName: "Not started",
+      timezone: "Asia/Dubai",
+      startedBot: false,
+      at: NOW,
+    });
+    const { reminder } = await db.insertReminder({
+      userId: user.id,
       title: "Nobody",
       message: "Do not send",
       kind: "once",
@@ -142,14 +149,31 @@ describe("reminders", () => {
       createdAt: NOW,
     });
     let calls = 0;
-    await processDueReminders(deps, {
-      workerId: "none",
-      send: async () => {
-        calls += 1;
-        return { messageId: 1 };
-      },
-    });
+    const mutable = { now: DateTime.fromISO(NOW, { zone: "Asia/Dubai" }) };
+    deps.clock = { now: () => mutable.now };
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      const run = await processDueReminders(deps, {
+        workerId: `not-started-${attempt}`,
+        send: async () => {
+          calls += 1;
+          return { messageId: 1 };
+        },
+      });
+      expect(run.failed).toBe(1);
+      const updated = await db.findReminderById(reminder.id);
+      if (attempt < 5) {
+        expect(updated?.status).toBe("active");
+        mutable.now = DateTime.fromISO(updated?.nextRunAt ?? NOW).plus({ seconds: 1 });
+      } else {
+        expect(updated?.status).toBe("failed");
+      }
+    }
     expect(calls).toBe(0);
+    const stopped = await processDueReminders(deps, {
+      workerId: "after-max-attempts",
+      send: async () => ({ messageId: 1 }),
+    });
+    expect(stopped.failed + stopped.sent + stopped.skipped).toBe(0);
   });
 
   it("creates several reminders from one list and does not duplicate them", async () => {
@@ -253,5 +277,60 @@ describe("reminders", () => {
 
     const missing = await applyReminderButton(deps, user, "snooze", "00000000-0000-4000-8000-000000000000");
     expect(missing.editText).toBeNull();
+  });
+
+  it("keeps a recurring reminder active after Done and restores its schedule after Snooze", async () => {
+    const { deps, db } = testDeps();
+    const user = await owner(db);
+    const { reminder } = await db.insertReminder({
+      userId: user.id,
+      title: "Backup",
+      message: "Check the server backup",
+      kind: "daily",
+      timezone: "Asia/Dubai",
+      nextRunAt: "2026-10-30T06:00:00.000Z",
+      weekdays: [],
+      intervalMinutes: null,
+      status: "active",
+      dedupeKey: "daily|backup|10:00|",
+      createdAt: NOW,
+    });
+    let sent = 0;
+    await processDueReminders(deps, {
+      workerId: "daily-first",
+      send: async () => {
+        sent += 1;
+        return { messageId: sent };
+      },
+    });
+
+    const scheduledNextRun = (await db.findReminderById(reminder.id))?.nextRunAt;
+    await applyReminderButton(deps, user, "done", reminder.id);
+    expect(await db.findReminderById(reminder.id)).toMatchObject({
+      status: "active",
+      nextRunAt: scheduledNextRun,
+    });
+
+    const snoozed = await applyReminderButton(deps, user, "snooze", reminder.id);
+    expect(snoozed.editText).toContain("Snoozed until");
+    const pending = await db.findReminderById(reminder.id);
+    expect(pending?.nextRunAt).toBe("2026-10-30T07:00:00.000Z");
+    expect(pending?.snoozedNextRunAt).toBe(scheduledNextRun);
+
+    deps.clock = fixedClock("2026-10-30T07:00:01.000Z", "Asia/Dubai");
+    await processDueReminders(deps, {
+      workerId: "daily-snooze",
+      send: async () => {
+        sent += 1;
+        return { messageId: sent };
+      },
+    });
+    expect(sent).toBe(2);
+    expect(await db.findReminderById(reminder.id)).toMatchObject({
+      status: "active",
+      nextRunAt: scheduledNextRun,
+      snoozedNextRunAt: null,
+      attemptOccurrenceAt: null,
+    });
   });
 });

@@ -3,6 +3,7 @@ import type { ChunkHit, ChunkMetadata, ChunkSource, SavedTextHit } from "../../d
 import { redactString } from "../../utils/text.js";
 import { toIso } from "../../utils/time.js";
 import { EMBEDDING_COLUMN_DIMENSIONS, ragConfig } from "./config.js";
+import { lexicalQuery } from "../../database/similarity.js";
 
 const CANDIDATE_LIMIT = 16;
 let warnedDimension = false;
@@ -50,11 +51,11 @@ export async function hybridSearch(deps: Deps, userId: string, question: string,
       { event: "rag_search_failed", message: redactString(error instanceof Error ? error.message : "search failed") },
       "chunk search failed",
     );
-    const saved = await deps.db.searchSavedText(userId, trimmed).catch(() => []);
+    const saved = await deps.db.searchSavedText(userId, lexicalQuery(trimmed)).catch(() => []);
     hits = saved.filter((hit) => hit.similarity >= config.minScore).map(savedAsChunk);
   }
   if (hits.length === 0 && embedding.ok) {
-    const saved = await deps.db.searchSavedText(userId, trimmed).catch(() => []);
+    const saved = await deps.db.searchSavedText(userId, lexicalQuery(trimmed)).catch(() => []);
     hits = saved.filter((hit) => hit.similarity >= config.minScore).map(savedAsChunk);
   }
   return finish(deps, prepareKnowledgeMatches(hits, limit, config.minScore));

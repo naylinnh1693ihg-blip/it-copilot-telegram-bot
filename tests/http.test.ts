@@ -50,4 +50,51 @@ describe("http routes", () => {
     expect(allowed.status).toBe(200);
     expect(allowed.body.forwarded).toBe(true);
   });
+
+  it("checks webhook secrets before rate limiting and keys limits by the trusted proxy IP", async () => {
+    const { deps } = testDeps();
+    const app = createHttpApp(deps, {
+      webhook: (_req, res) => {
+        res.status(200).json({ forwarded: true });
+      },
+    });
+
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      const denied = await request(app)
+        .post("/telegram/webhook")
+        .set("X-Forwarded-For", "198.51.100.10")
+        .send({ update_id: attempt });
+      expect(denied.status).toBe(401);
+    }
+
+    const accepted = await request(app)
+      .post("/telegram/webhook")
+      .set("X-Forwarded-For", "198.51.100.10")
+      .set("X-Telegram-Bot-Api-Secret-Token", "hook_secret")
+      .send({ update_id: 121 });
+    expect(accepted.status).toBe(200);
+
+    for (let attempt = 0; attempt < 119; attempt += 1) {
+      const allowed = await request(app)
+        .post("/telegram/webhook")
+        .set("X-Forwarded-For", "198.51.100.10")
+        .set("X-Telegram-Bot-Api-Secret-Token", "hook_secret")
+        .send({ update_id: attempt });
+      expect(allowed.status).toBe(200);
+    }
+
+    const limited = await request(app)
+      .post("/telegram/webhook")
+      .set("X-Forwarded-For", "198.51.100.10")
+      .set("X-Telegram-Bot-Api-Secret-Token", "hook_secret")
+      .send({ update_id: 120 });
+    expect(limited.status).toBe(429);
+
+    const separateIp = await request(app)
+      .post("/telegram/webhook")
+      .set("X-Forwarded-For", "198.51.100.11")
+      .set("X-Telegram-Bot-Api-Secret-Token", "hook_secret")
+      .send({ update_id: 122 });
+    expect(separateIp.status).toBe(200);
+  });
 });

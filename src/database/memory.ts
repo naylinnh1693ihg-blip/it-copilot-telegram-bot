@@ -15,7 +15,7 @@ import type {
   UsageEntry,
   User,
 } from "../types/models.js";
-import { SAVED_TEXT_MIN_SIMILARITY, cosineSimilarity, hybridScore, trigramWordSimilarity } from "./similarity.js";
+import { SAVED_TEXT_MIN_SIMILARITY, cosineSimilarity, hybridScore, lexicalSimilarity, trigramWordSimilarity } from "./similarity.js";
 import type { ChunkHit, ChunkSource, CompletedTask, Database, NewDocument, NewEquipment, NewKnowledge, NewNote, NewReminder, NewTask, SavedTextHit, StoredChunk, UsageSlice } from "./types.js";
 
 interface Counters {
@@ -203,6 +203,7 @@ export class MemoryDatabase implements Database {
       id: randomUUID(),
       reminderNumber: this.nextCounter(input.userId, "reminder"),
       attemptOccurrenceAt: null,
+      snoozedNextRunAt: null,
       lockedUntil: null,
       lockToken: null,
       lastError: null,
@@ -535,7 +536,7 @@ export class MemoryDatabase implements Database {
       .map((chunk) => {
         const lexical = Math.max(
           chunk.title.toLowerCase().includes(q.toLowerCase()) || chunk.content.toLowerCase().includes(q.toLowerCase()) ? 1 : 0,
-          trigramWordSimilarity(q, `${chunk.title} ${chunk.content}`),
+          lexicalSimilarity(q, `${chunk.title} ${chunk.content}`),
         );
         const sameModel = !chunk.embeddingModel || !embeddingModel || chunk.embeddingModel === embeddingModel;
         const hasVector = !!embedding && !!chunk.embedding && sameModel;

@@ -3,6 +3,16 @@ import { handleText } from "../src/services/assistant/handleText.js";
 import { owner, testDeps } from "./helpers.js";
 
 describe("tasks", () => {
+  it("accepts today as a due date and sets it to the end of the user's day", async () => {
+    const { deps, db } = testDeps();
+    const user = await owner(db);
+
+    const reply = await handleText(deps, user, "Create a task to review the switch today.");
+
+    expect(reply.text).toContain("Created task 1");
+    expect((await db.listTasks(user.id))[0]?.dueAt).toBe("2026-10-30T19:59:59.999Z");
+  });
+
   it("creates, lists, completes, moves, and deletes with confirmation", async () => {
     const { deps, db } = testDeps();
     const user = await owner(db);

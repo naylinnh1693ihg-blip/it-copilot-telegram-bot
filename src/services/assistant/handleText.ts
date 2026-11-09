@@ -14,7 +14,12 @@ import { createManyTasks, extractLocalTasks, extractTasksWithGrok } from "./mult
 import { createManyReminders, extractLocalReminders, extractRemindersWithGrok } from "./multiReminder.js";
 import { answerWithRag, looksLikeQuestion } from "../rag/retrieve.js";
 
-async function interpret(deps: Deps, user: User, text: string): Promise<Intent> {
+async function interpret(
+  deps: Deps,
+  user: User,
+  text: string,
+  onPreview?: (plainText: string) => Promise<void>,
+): Promise<Intent> {
   // Daily phrases in DAILY_MATCHERS are confident and stop here. Grok runs only when this is null.
   const local = parseLocalIntent(text);
   if (isConfidentLocalIntent(local)) {
@@ -39,6 +44,7 @@ async function interpret(deps: Deps, user: User, text: string): Promise<Intent> 
     );
   }
   deps.logger.info({ event: "intent_route", route: "grok" }, "message sent to Grok");
+  await onPreview?.("Working…");
   try {
     const history = await deps.db.recentTurns(user.id, 8);
     const prompt = intentPrompt(history, text);
@@ -157,6 +163,7 @@ export async function handleText(
       }
       deps.logger.info({ event: "message_route", route: "fallback_grok" }, "fallback_grok");
       deps.logger.info({ event: "intent_route", route: "grok", intent: "create_reminders" }, "message sent to Grok");
+      await options?.onAnalysisPreview?.("Working…");
       const reminders = await extractRemindersWithGrok(deps, user, cleaned);
       const reply = reminders
         ? await createManyReminders(deps, user, reminders)
@@ -181,6 +188,7 @@ export async function handleText(
       }
       deps.logger.info({ event: "message_route", route: "fallback_grok" }, "fallback_grok");
       deps.logger.info({ event: "intent_route", route: "grok", intent: "create_tasks" }, "message sent to Grok");
+      await options?.onAnalysisPreview?.("Working…");
       const tasks = await extractTasksWithGrok(deps, user, cleaned);
       const reply = tasks
         ? await createManyTasks(deps, user, tasks)
@@ -209,7 +217,7 @@ export async function handleText(
       await remember(deps, user, cleaned, reply.text);
       return reply;
     }
-    const intent = await interpret(deps, user, cleaned);
+    const intent = await interpret(deps, user, cleaned, options?.onAnalysisPreview);
     const reply = await execute(deps, user, intent, { confirmed: false, onAnalysisPreview: options?.onAnalysisPreview });
     if (reply.confirmation) {
       const expires = now.plus({ minutes: 10 }).toUTC().toISO();

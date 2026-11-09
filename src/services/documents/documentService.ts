@@ -25,10 +25,10 @@ export async function saveDocument(
     throw new AppError(`This file is too large to store through the current Telegram connection. I did not store it.`);
   }
   const detected = detectFile(input.filename, input.declaredMime, input.buffer);
-  const extracted = await extractForSave(deps, detected.kind, input.buffer);
   const sha256 = createHash("sha256").update(input.buffer).digest("hex");
   const existing = await deps.db.findDocumentByHash(user.id, sha256);
   if (existing) return { document: existing, duplicate: true, text: (await deps.db.getExtraction(existing.id))?.text ?? "" };
+  const extracted = await extractForSave(deps, detected.kind, input.buffer);
 
   const id = randomUUID();
   const storagePath = `${user.id}/${id}/${id}.${detected.extension}`;

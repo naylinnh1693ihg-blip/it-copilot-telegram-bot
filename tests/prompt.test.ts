@@ -6,17 +6,19 @@ const context = ["[1] Note #14 (narrative)", "The printer-floor2 uses 192.168.1.
 describe("rag prompts", () => {
   it("builds a grounded messages list and a fallback when context is missing", () => {
     const rag = buildRagMessages("What’s the IP of the floor 2 printer?", context, {
-      sourcesLine: "Sources: Note #14",
+      sourcesLine: "From note #14",
     });
     expect(rag.mode).toBe("rag");
     expect(rag.messages.map((message) => message.role)).toEqual(["system", "user"]);
     expect(rag.system).toContain("Answer the user's question using only the context below.");
     expect(rag.system).toContain("not in the knowledge base");
     expect(rag.system).toContain("exactly as they appear");
+    expect(rag.system).toContain("never repeat an entire note when one fact is requested");
+    expect(rag.system).toContain("For a network setting, use a concise labeled bullet");
     expect(rag.user).toContain("Context:\n<untrusted_record_1>");
     expect(rag.user).toContain("192.168.1.10");
     expect(rag.user).toContain("User question:\n<untrusted_question>");
-    expect(rag.sourcesLine).toBe("Sources: Note #14");
+    expect(rag.sourcesLine).toBe("From note #14");
     expect(rag.messages[0]?.content).toBe(rag.system);
     expect(rag.messages[1]?.content).toBe(rag.user);
 

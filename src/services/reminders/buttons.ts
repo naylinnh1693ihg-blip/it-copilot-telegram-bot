@@ -47,19 +47,35 @@ export async function applyReminderButton(
   }
   const now = deps.clock.now().setZone(user.timezone || reminder.timezone);
   if (action === "done") {
-    if (reminder.status !== "completed") {
+    if (reminder.kind !== "once") {
+      if (reminder.snoozedNextRunAt) {
+        await save(deps, {
+          ...reminder,
+          nextRunAt: reminder.snoozedNextRunAt,
+          attemptOccurrenceAt: null,
+          snoozedNextRunAt: null,
+          lockedUntil: null,
+          lockToken: null,
+          lastError: null,
+          updatedAt: toIso(now),
+        });
+      }
+    } else if (reminder.status !== "completed") {
       await save(deps, { ...reminder, status: "completed", attemptOccurrenceAt: null, lockedUntil: null, lockToken: null, lastError: null, updatedAt: toIso(now) });
     }
     deps.logger.info({ event: "reminder_button", action: "done", reminderId }, "reminder marked done");
     const text = `Done. Reminder ${reminder.reminderNumber}: ${reminder.title}`;
     return { toast: "Marked done", editText: `${reminderText(reminder)}\n\nDone.`, text };
   }
-  const nextRunAt = toIso(now.plus({ minutes: REMINDER_SNOOZE_MINUTES }));
+  const snoozeAt = toIso(now.plus({ minutes: REMINDER_SNOOZE_MINUTES }));
   const saved = await save(deps, {
     ...reminder,
     status: "active",
-    nextRunAt,
-    attemptOccurrenceAt: null,
+    nextRunAt: snoozeAt,
+    attemptOccurrenceAt: reminder.kind === "once" ? null : snoozeAt,
+    snoozedNextRunAt: reminder.kind === "once"
+      ? null
+      : reminder.snoozedNextRunAt ?? reminder.nextRunAt,
     lockedUntil: null,
     lockToken: null,
     lastError: null,

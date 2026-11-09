@@ -19,6 +19,23 @@ export function currentUser(ctx: Context): User {
   return user;
 }
 
+/** Telegram clears a typing indicator after about five seconds, so a long model call needs a refresh. */
+export function keepTyping(ctx: Context): { stop(): void } {
+  let stopped = false;
+  const send = (): void => {
+    if (stopped || ctx.chat === undefined) return;
+    void ctx.replyWithChatAction("typing").catch(() => undefined);
+  };
+  send();
+  const timer = setInterval(send, 4_000);
+  return {
+    stop() {
+      stopped = true;
+      clearInterval(timer);
+    },
+  };
+}
+
 export function createLiveAnalysis(
   ctx: Context,
   options: { minIntervalMs: number; logger?: AppLogger },

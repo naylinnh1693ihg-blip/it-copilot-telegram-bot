@@ -62,7 +62,7 @@ export function formatPromptRun(result: PromptRunResult, debug: boolean): string
     `Tokens: in=${result.inputTokens} out=${result.outputTokens}`,
     "Answer:",
     result.ok ? result.answer || "(empty)" : result.error,
-    result.sourcesLine || "Sources: (none)",
+    result.sourcesLine || "From: (none)",
   ];
   if (debug) {
     lines.push("Messages:");

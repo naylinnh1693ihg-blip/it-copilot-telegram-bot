@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import ExcelJS from "exceljs";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
@@ -10,7 +11,7 @@ import { extractDocumentText } from "../src/services/documents/documentProcessor
 import { imageToVisionInput, pdfPagesForVision, shouldUseVision } from "../src/services/documents/vision.js";
 import { handleText } from "../src/services/assistant/handleText.js";
 import { AppError } from "../src/utils/errors.js";
-import { owner, testDeps } from "./helpers.js";
+import { NOW, owner, testDeps } from "./helpers.js";
 
 const PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
@@ -18,6 +19,35 @@ const PNG = Buffer.from(
 );
 
 describe("documents", () => {
+  it("detects duplicate uploads before attempting OCR or extraction", async () => {
+    const { deps, db } = testDeps({ VISION_MODE: "ocr" });
+    const user = await owner(db);
+    const invalidImage = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const sha256 = createHash("sha256").update(invalidImage).digest("hex");
+    const existing = await db.insertDocument({
+      id: "existing-image",
+      userId: user.id,
+      title: "Already saved image",
+      originalFilename: "existing.png",
+      storagePath: `${user.id}/existing.png`,
+      mimeType: "image/png",
+      byteSize: invalidImage.length,
+      sha256,
+      category: "General",
+      tags: [],
+      createdAt: NOW,
+    });
+
+    const duplicate = await saveDocument(deps, user, {
+      filename: "copy.png",
+      declaredMime: "image/png",
+      buffer: invalidImage,
+    });
+
+    expect(duplicate.duplicate).toBe(true);
+    expect(duplicate.document.id).toBe(existing.id);
+  });
+
   it("rejects a mismatched file and stores a real spreadsheet that can be searched", async () => {
     const { deps, db, storage } = testDeps();
     const user = await owner(db);

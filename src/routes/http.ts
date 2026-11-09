@@ -12,6 +12,7 @@ export function createHttpApp(
   } = {},
 ): express.Express {
   const app = express();
+  app.set("trust proxy", 1);
   app.disable("x-powered-by");
   app.use(express.json({ limit: "1mb" }));
   const limiter = createRateLimiter(120, 60_000);
@@ -30,13 +31,13 @@ export function createHttpApp(
   });
 
   app.post("/internal/reminders/process", async (req, res) => {
-    if (!limiter.allow(req.ip ?? "local", Date.now())) {
-      res.status(429).json({ ok: false });
-      return;
-    }
     const provided = req.header("authorization")?.replace(/^Bearer\s+/i, "");
     if (!deps.env.CRON_SECRET || !secretsMatch(provided, deps.env.CRON_SECRET)) {
       res.status(401).json({ ok: false });
+      return;
+    }
+    if (!limiter.allow(req.ip ?? "local", Date.now())) {
+      res.status(429).json({ ok: false });
       return;
     }
     if (!options.sendTelegram) {
@@ -54,12 +55,12 @@ export function createHttpApp(
 
   if (options.webhook) {
     app.post("/telegram/webhook", (req, res, next) => {
-      if (!limiter.allow(req.ip ?? "webhook", Date.now())) {
-        res.status(429).json({ ok: false });
-        return;
-      }
       if (!secretsMatch(req.header("x-telegram-bot-api-secret-token"), deps.env.TELEGRAM_WEBHOOK_SECRET)) {
         res.status(401).json({ ok: false });
+        return;
+      }
+      if (!limiter.allow(req.ip ?? "webhook", Date.now())) {
+        res.status(429).json({ ok: false });
         return;
       }
       next();

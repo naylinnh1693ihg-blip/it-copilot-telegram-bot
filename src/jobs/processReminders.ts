@@ -46,16 +46,18 @@ export async function processDueReminders(
       : { ...claimedReminder, attemptOccurrenceAt: occurrence };
     if (!claimedReminder.attemptOccurrenceAt) await save(deps, reminder);
 
-    if (!user?.startedBot) {
-      await fail(deps, reminder, user, occurrence, 1, "The user has not started the bot.", now);
-      result.failed += 1;
-      continue;
-    }
-
     const gate = await deps.db.startDelivery(reminder.id, occurrence, nowIso);
     if (gate.action === "skip") {
       await advance(deps, reminder, occurrence);
       result.skipped += 1;
+      continue;
+    }
+
+    if (!user?.startedBot) {
+      const message = "The user has not started the bot.";
+      await deps.db.finishDelivery(reminder.id, occurrence, "failed", message, null, nowIso);
+      await fail(deps, reminder, user, occurrence, gate.attempt, message, now);
+      result.failed += 1;
       continue;
     }
 
@@ -77,6 +79,20 @@ export async function processDueReminders(
 }
 
 async function advance(deps: Deps, reminder: Reminder, occurrence: string): Promise<void> {
+  if (reminder.snoozedNextRunAt) {
+    await save(deps, {
+      ...reminder,
+      status: "active",
+      nextRunAt: reminder.snoozedNextRunAt,
+      attemptOccurrenceAt: null,
+      snoozedNextRunAt: null,
+      lockedUntil: null,
+      lockToken: null,
+      lastError: null,
+      updatedAt: toIso(deps.clock.now()),
+    });
+    return;
+  }
   const next = advanceOccurrence(reminder.kind, occurrence, reminder.timezone, reminder.intervalMinutes);
   await save(deps, {
     ...reminder,
@@ -100,12 +116,27 @@ async function fail(
   now: DateTime,
 ): Promise<void> {
   if (attempt >= MAX_ATTEMPTS) {
+    if (reminder.snoozedNextRunAt) {
+      await save(deps, {
+        ...reminder,
+        status: "active",
+        nextRunAt: reminder.snoozedNextRunAt,
+        attemptOccurrenceAt: null,
+        snoozedNextRunAt: null,
+        lockedUntil: null,
+        lockToken: null,
+        lastError: message,
+        updatedAt: toIso(now),
+      });
+      return;
+    }
     const next = reminder.kind === "once" ? null : advanceOccurrence(reminder.kind, occurrence, reminder.timezone, reminder.intervalMinutes);
     await save(deps, {
       ...reminder,
       status: next ? "active" : "failed",
       nextRunAt: next ?? toIso(now.plus({ hours: 1 })),
       attemptOccurrenceAt: null,
+      snoozedNextRunAt: null,
       lockedUntil: null,
       lockToken: null,
       lastError: message,

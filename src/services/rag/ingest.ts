@@ -6,7 +6,7 @@ import { toIso } from "../../utils/time.js";
 import { chunkText, type TextChunk } from "./chunk.js";
 import { EMBEDDING_COLUMN_DIMENSIONS, ragConfig } from "./config.js";
 
-const EMBED_BATCH = 8;
+const EMBED_BATCH = 32;
 const EMBED_ATTEMPTS = 3;
 /** Shorter than this is not a useful passage. "VLAN 20 is the guest network." still qualifies. */
 const MIN_TEXT_CHARS = 12;
@@ -147,11 +147,13 @@ export async function ingestSource(
     const cleaned = input.text.replace(/\s+/g, " ").trim();
     if (cleaned.length < MIN_TEXT_CHARS || secretRisk(input.text)) return { status: "skipped", narrative: 0, identifier: 0 };
     const config = ragConfig(deps.env);
-    const equipment = await deps.db.listEquipment(input.userId).catch(() => []);
+    const isDocument = input.source === "document";
+    const equipment = isDocument ? [] : await deps.db.listEquipment(input.userId).catch(() => []);
     const pieces = chunkText(input.text, {
-      chunkTokens: config.chunkTokens,
-      overlapTokens: config.overlapTokens,
+      chunkTokens: isDocument ? 800 : config.chunkTokens,
+      overlapTokens: isDocument ? 0 : config.overlapTokens,
       identifierNames: equipment.map((item) => item.name),
+      includeIdentifierChunks: !isDocument,
     });
     const narrative = pieces.filter((piece) => piece.chunkType === "narrative").length;
     const identifier = pieces.filter((piece) => piece.chunkType === "identifier").length;

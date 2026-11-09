@@ -62,7 +62,7 @@ async function finishAnalysis(
   summary: { text: string; parseMode: "MarkdownV2"; notes: string[]; summary: string },
 ): Promise<{ text: string; parseMode: "MarkdownV2" }> {
   const notes = summary.notes.map((note) => `- ${note}`).join("\n");
-  await indexSavedText(deps, {
+  const indexing = indexSavedText(deps, {
     userId: user.id,
     source: "document",
     sourceId: document.id,
@@ -70,6 +70,15 @@ async function finishAnalysis(
     title: document.title,
     text: `${document.title}\n\nKey notes:\n${notes}\n\nSummary:\n${summary.summary}\n\n${extracted}`,
   });
+  // Tests wait so the next assertion can see the chunks. A live analysis sends the summary first.
+  const finished = indexing.catch((error: unknown) => {
+    deps.logger.warn(
+      { event: "document_indexed", documentId: document.id, status: "failed", message: redactString(error instanceof Error ? error.message : "index failed") },
+      "document indexing failed",
+    );
+  });
+  if (deps.env.NODE_ENV === "test") await finished;
+  else void finished;
   return { text: summary.text, parseMode: summary.parseMode };
 }
 

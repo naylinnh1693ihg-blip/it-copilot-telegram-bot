@@ -13,7 +13,7 @@ import { createRateLimiter } from "../utils/security.js";
 import { redactString } from "../utils/text.js";
 import { toIso } from "../utils/time.js";
 import { tasksPhrase } from "./commands/arguments.js";
-import { buildStatus, createLiveAnalysis, currentUser, rememberUser, sendReply } from "./handlers/messages.js";
+import { buildStatus, createLiveAnalysis, currentUser, keepTyping, rememberUser, sendReply } from "./handlers/messages.js";
 import { applyReminderButton, parseReminderCallback } from "../services/reminders/buttons.js";
 
 function captionPlan(caption: string | undefined, filename: string): { title: string; summarize: boolean } {
@@ -32,6 +32,7 @@ async function deliver(
   produce: (onAnalysisPreview: (plainText: string) => Promise<void>) => Promise<Reply>,
 ): Promise<void> {
   const live = createLiveAnalysis(ctx, { minIntervalMs: deps.env.TELEGRAM_EDIT_INTERVAL_MS, logger: deps.logger });
+  const typing = keepTyping(ctx);
   try {
     const reply = await produce((plainText) => live.update(plainText));
     if (!(await live.finish(reply))) await sendReply(ctx, reply);
@@ -39,6 +40,8 @@ async function deliver(
     deps.logger.error({ event: "document_analysis_failed", message: redactString(error instanceof Error ? error.message : "error") }, "document analysis failed");
     const message = toUserMessage(error);
     if (!(await live.finish({ text: message }))) await ctx.reply(message);
+  } finally {
+    typing.stop();
   }
 }
 
@@ -187,6 +190,7 @@ async function storeFile(
   file: { fileId: string; fileSize?: number; filename: string; mime: string; caption?: string },
 ): Promise<void> {
   const plan = captionPlan(file.caption, file.filename);
+  const typing = keepTyping(ctx);
   let saved: Awaited<ReturnType<typeof saveDocument>>;
   try {
     const buffer = await downloadTelegramFile({
@@ -204,8 +208,11 @@ async function storeFile(
       category: matchCategory(`${file.caption ?? ""} ${file.filename}`),
     });
   } catch (error) {
+    typing.stop();
     await ctx.reply(error instanceof AppError ? error.userMessage : "I could not store that file. Nothing was saved.");
     return;
+  } finally {
+    typing.stop();
   }
 
   const imageWithoutText = saved.document.mimeType.startsWith("image/") && !saved.text.trim();

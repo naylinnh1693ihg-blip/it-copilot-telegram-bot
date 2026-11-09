@@ -15,8 +15,8 @@ export function createXaiClient(options: {
   });
   const llm = createResilientClient({
     model: options.model,
-    create: async (body) => {
-      const response = (await client.responses.create(body as never)) as {
+    create: async (body, requestOptions) => {
+      const response = (await client.responses.create(body as never, requestOptions)) as {
         output_text?: string | null;
         output?: unknown;
         usage?: { input_tokens?: number; output_tokens?: number } | null;
@@ -32,8 +32,11 @@ export function createXaiClient(options: {
           : undefined,
       };
     },
-    stream: async function* (body) {
-      const stream = (await client.responses.create({ ...body, stream: true } as never)) as unknown as AsyncIterable<{
+    stream: async function* (body, requestOptions) {
+      const stream = (await client.responses.create({ ...body, stream: true } as never, {
+        ...requestOptions,
+        stream: true,
+      })) as unknown as AsyncIterable<{
         type: string;
         delta?: string;
         message?: string;

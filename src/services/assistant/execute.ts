@@ -15,6 +15,7 @@ import { formatWhen, parseClock, toIso } from "../../utils/time.js";
 import { HELP_TEXT } from "./help.js";
 import { weekCostReply } from "./weekCost.js";
 import { searchDocumentContent } from "../rag/documentSearch.js";
+import { focusDelimitedFact } from "../rag/context.js";
 import { indexSavedText } from "../rag/index.js";
 import { attachNoteLinks, formatNoteLinks } from "../notes/links.js";
 import { draftDailySummary, draftIncidentReport, draftShiftHandover } from "./reports.js";
@@ -232,9 +233,13 @@ export async function execute(
       if (!title) return { text: "What should the task be called?" };
       let dueAt: string | null = null;
       if (intent.when_text) {
-        const schedule = parseSchedule(intent.when_text, now);
-        if (!schedule) return { text: "I couldn't read that due time. Try 'tomorrow' or '3 PM'." };
-        dueAt = toIso(schedule.at);
+        if (intent.when_text.trim().toLowerCase() === "today") {
+          dueAt = toIso(now.endOf("day"));
+        } else {
+          const schedule = parseSchedule(intent.when_text, now);
+          if (!schedule) return { text: "I couldn't read that due time. Try 'tomorrow' or '3 PM'." };
+          dueAt = toIso(schedule.at);
+        }
       }
       const task = await deps.db.insertTask({
         userId: user.id,
@@ -475,12 +480,12 @@ export async function execute(
     case "search_knowledge": {
       const query = cleanText(intent.search_query, 200);
       if (!query) return { text: "What should I search for?" };
-      const notes = await deps.db.searchNotes(user.id, query);
-      const knowledge = await deps.db.searchKnowledge(user.id, query);
+      const notes = exactSingleTermMatches(await deps.db.searchNotes(user.id, query), query, (note) => `${note.title}\n${note.content}`);
+      const knowledge = exactSingleTermMatches(await deps.db.searchKnowledge(user.id, query), query, (entry) => `${entry.title}\n${entry.content}`);
       if (notes.length === 0 && knowledge.length === 0) return { text: `I don't have anything saved about "${query}".` };
       const lines = [
-        ...notes.map((note) => `Note ${note.noteNumber}: ${snippet(note.content)}`),
-        ...knowledge.map((entry) => `Knowledge ${entry.entryNumber} (${entry.category}): ${snippet(entry.content)}`),
+        ...notes.map((note) => formatSearchResult("Note", note.noteNumber, note.content, query)),
+        ...knowledge.map((entry) => formatSearchResult(`Knowledge ${entry.entryNumber} (${entry.category})`, entry.entryNumber, entry.content, query)),
       ];
       if (intent.tags === "summarize" && deps.llm) {
         const summary = await guardedText(deps, user, "summarize_records", summaryPrompt(lines.join("\n")), lines.join("\n"));
@@ -599,6 +604,51 @@ export async function execute(
     default:
       return { text: "I can't do that action." };
   }
+}
+
+function formatSearchResult(label: string, number: number, content: string, query: string): string {
+  const fact = focusDelimitedFact(content, query);
+  const source = label === "Note" ? `Note #${number}` : label;
+  if (fact !== content) {
+    const vlan = fact.match(/^(?:GP Policy\s*=\s*)?(.+?)\s+is\s+VLAN\s+(\d+)\s*<([^>]+)>$/i);
+    if (vlan?.[1] && vlan[2] && vlan[3]) {
+      const policy = /^GP Policy\s*=/i.test(fact);
+      return `• ${policy ? `GP Policy: ${vlan[1]}` : vlan[1]}\n  VLAN: ${vlan[2]}\n  Subnet: ${vlan[3]}\n  Source: ${source}`;
+    }
+    if (fact.includes("\n")) return `${fact}\nSource: ${source}`;
+    return `• ${fact}\n  Source: ${source}`;
+  }
+  const around = excerptAround(content, query);
+  if (around) return `• ${around}\n  Source: ${source}`;
+  if ((content.match(/;/g) ?? []).length >= 6) {
+    return `I found a table in ${source}. Ask for a printer name, IP, serial, or asset number.`;
+  }
+  return `${label === "Note" ? `Note ${number}` : label}: ${snippet(content)}`;
+}
+
+function excerptAround(content: string, query: string): string | null {
+  const filler = new Set(["what", "whats", "the", "for", "extension", "extensions", "ext", "user", "username", "number", "about", "pc"]);
+  const term = (query.toLowerCase().match(/[a-z0-9]+/g) ?? []).find((word) => word.length > 2 && !filler.has(word));
+  if (!term) return null;
+  const flat = content.replace(/\s+/g, " ").trim();
+  const at = flat.toLowerCase().indexOf(term);
+  if (at < 0) return null;
+  let start = Math.max(0, at - 48);
+  let end = Math.min(flat.length, at + term.length + 64);
+  while (start > 0 && flat[start - 1] !== " ") start -= 1;
+  while (end < flat.length && flat[end] !== " ") end += 1;
+  if (end - start >= flat.length - 24) return null;
+  const excerpt = flat.slice(start, end).trim();
+  return `${start > 0 ? "… " : ""}${excerpt}${end < flat.length ? " …" : ""}`;
+}
+
+function exactSingleTermMatches<T>(items: T[], query: string, getText: (item: T) => string): T[] {
+  const terms = query.toLowerCase().match(/[a-z0-9]+/g) ?? [];
+  if (terms.length !== 1) return items;
+  const escaped = terms[0]?.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (!escaped) return items;
+  const exactTerm = new RegExp(`\\b${escaped}\\b`, "i");
+  return items.filter((item) => exactTerm.test(getText(item)));
 }
 
 export async function summaryFromRecords(deps: Deps, user: User, now: DateTime): Promise<string> {

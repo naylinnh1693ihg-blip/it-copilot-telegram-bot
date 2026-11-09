@@ -55,6 +55,7 @@ export interface Reminder {
   status: ReminderStatus;
   dedupeKey: string;
   attemptOccurrenceAt: string | null;
+  snoozedNextRunAt: string | null;
   lockedUntil: string | null;
   lockToken: string | null;
   lastError: string | null;

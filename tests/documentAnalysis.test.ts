@@ -64,6 +64,38 @@ describe("document analysis", () => {
     expect(reply.text.length).toBeLessThanOrEqual(3_500);
   });
 
+  it.each([
+    { example: "99,999-token document", chars: 399_996, longContext: false },
+    { example: "100,000-token document", chars: 400_000, longContext: true },
+  ])("applies the timeout policy to a $example", async ({ chars, longContext }) => {
+    const { deps, db } = testDeps({ XAI_LONG_CONTEXT_TIMEOUT_MS: "90000" });
+    const user = await owner(db);
+    let policy: { timeoutMs?: number; retry?: boolean } | undefined;
+    deps.llm = {
+      async completeStructured() {
+        throw new Error("not used");
+      },
+      async completeText() {
+        throw new Error("not used");
+      },
+      async streamStructured(input) {
+        policy = input;
+        return { text: MODEL_ANALYSIS, inputTokens: 10_000, outputTokens: 20 };
+      },
+    };
+
+    const sentence = "The network review found three access switches need firmware updates. ";
+    const text = sentence.repeat(Math.ceil(chars / sentence.length)).slice(0, chars);
+    await summarizeDocument(deps, user, text);
+
+    if (longContext) {
+      expect(policy).toMatchObject({ timeoutMs: 90_000, retry: false });
+    } else {
+      expect(policy?.timeoutMs).toBeUndefined();
+      expect(policy?.retry).toBeUndefined();
+    }
+  });
+
   it("caps oversized model output without breaking Markdown or Telegram's message limit", async () => {
     const { deps, db } = testDeps();
     const user = await owner(db);

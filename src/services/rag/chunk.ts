@@ -1,3 +1,5 @@
+import { chunkInventory } from "./table.js";
+
 const CHARS_PER_TOKEN = 4;
 const IDENTIFIER_MIN_TOKENS = 50;
 const IDENTIFIER_MAX_TOKENS = 150;
@@ -16,6 +18,7 @@ export interface ChunkOptions {
   overlapTokens: number;
   /** Known equipment names. A name of at least 4 characters is treated as an identifier. */
   identifierNames?: string[];
+  includeIdentifierChunks?: boolean;
 }
 
 const IPV4 = /\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\b/g;
@@ -32,13 +35,17 @@ export function chunkText(text: string, options: ChunkOptions): TextChunk[] {
   const overlap = Math.max(0, options.overlapTokens) * CHARS_PER_TOKEN;
   const cleaned = text.replace(/\r\n/g, "\n").trim();
   if (!cleaned) return [];
+  const inventory = chunkInventory(cleaned, size);
+  if (inventory) return inventory.map((content): TextChunk => ({ content, chunkType: "narrative" }));
 
   const narrative = (cleaned.length <= size ? [cleaned] : packNarrative(cleaned, size, overlap)).map(
     (content): TextChunk => ({ content, chunkType: "narrative" }),
   );
-  const identifiers = identifierWindows(cleaned, options.identifierNames ?? [])
-    .filter((content) => !coveredByShortNarrative(content, narrative))
-    .map((content): TextChunk => ({ content, chunkType: "identifier" }));
+  const identifiers = options.includeIdentifierChunks === false
+    ? []
+    : identifierWindows(cleaned, options.identifierNames ?? [])
+      .filter((content) => !coveredByShortNarrative(content, narrative))
+      .map((content): TextChunk => ({ content, chunkType: "identifier" }));
   return [...narrative, ...identifiers];
 }
 

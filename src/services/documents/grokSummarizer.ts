@@ -10,6 +10,7 @@ import { toIso } from "../../utils/time.js";
 const MAX_GROK_INPUT = 12_000;
 const MAX_TELEGRAM_REPLY = 3_500;
 const MAX_NOTES_CHARS = 2_000;
+const LONG_CONTEXT_TIMEOUT_THRESHOLD_TOKENS = 100_000;
 const OMITTED_MIDDLE = "\n[Middle of document omitted to fit the analysis limit.]\n";
 
 const KeyNoteSchema = z.object({
@@ -171,7 +172,12 @@ export async function summarizeDocument(
   // Characters / 4. Under 120k tokens stays on grok-4.7. The next band uses the
   // long-context model. Past that band, the longest model still only sees the
   // start and end, and the reply says the middle was left out.
-  const choice = chooseAnalysisModel(text, analysisModelConfig(deps.env));
+  const modelConfig = analysisModelConfig(deps.env);
+  const choice = chooseAnalysisModel(text, modelConfig);
+  const longContext = choice.estimatedTokens >= Math.min(
+    modelConfig.standardTokenLimit,
+    LONG_CONTEXT_TIMEOUT_THRESHOLD_TOKENS,
+  );
   const overLimit = choice.truncateToChars != null && text.length > choice.truncateToChars;
   const source = overLimit && choice.truncateToChars != null ? truncateDocumentForAnalysis(text, choice.truncateToChars) : text;
   deps.logger.info(
@@ -215,6 +221,9 @@ export async function summarizeDocument(
     schema: DOCUMENT_ANALYSIS_JSON_SCHEMA,
     images: images.map((image) => ({ mime: image.mime, base64: image.data.toString("base64") })),
     model: images.length ? visionModel : choice.model,
+    ...(longContext
+      ? { timeoutMs: deps.env.XAI_LONG_CONTEXT_TIMEOUT_MS, retry: false }
+      : {}),
   };
   if (onPreview) await onPreview("Analyzing the document…");
   const result = deps.llm.streamStructured
