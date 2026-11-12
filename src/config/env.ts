@@ -43,6 +43,13 @@ const schema = z.object({
   REMINDER_POLL_MS: z.coerce.number().int().nonnegative().default(30_000),
   LOG_LEVEL: z.string().default("info"),
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(20 * 1024 * 1024),
+  /** Serves the admin web app under /admin. Anything other than "true" leaves it off and /admin returns 404. */
+  ADMIN_ENABLED: z
+    .string()
+    .default("false")
+    .transform((value) => value.trim().toLowerCase() === "true"),
+  /** HMAC key for admin session ids, sign-in tokens, and CSRF tokens. At least 32 characters. */
+  ADMIN_SESSION_SECRET: z.string().default(""),
 });
 
 export type Env = z.infer<typeof schema>;
@@ -67,6 +74,9 @@ export function missingRuntimeSettings(env: Env): string[] {
     if (env.TELEGRAM_WEBHOOK_SECRET && !/^[A-Za-z0-9_-]{1,256}$/.test(env.TELEGRAM_WEBHOOK_SECRET)) {
       missing.push("TELEGRAM_WEBHOOK_SECRET (use 1-256 characters: letters, numbers, _ or -)");
     }
+  }
+  if (env.ADMIN_ENABLED && env.ADMIN_SESSION_SECRET.length < 32) {
+    missing.push("ADMIN_SESSION_SECRET (at least 32 characters when ADMIN_ENABLED=true)");
   }
   return missing;
 }

@@ -2,6 +2,7 @@ import express, { type RequestHandler } from "express";
 import type { Deps } from "../app/deps.js";
 import { processDueReminders } from "../jobs/processReminders.js";
 import { createRateLimiter, secretsMatch } from "../utils/security.js";
+import { createAdminRouter } from "./admin/index.js";
 import { redactString } from "../utils/text.js";
 
 export function createHttpApp(
@@ -9,6 +10,7 @@ export function createHttpApp(
   options: {
     sendTelegram?: (telegramUserId: number, text: string, buttons?: Array<{ label: string; data: string }>) => Promise<{ messageId: number }>;
     webhook?: RequestHandler;
+    adminStaticDir?: string;
   } = {},
 ): express.Express {
   const app = express();
@@ -65,6 +67,11 @@ export function createHttpApp(
       }
       next();
     }, options.webhook);
+  }
+
+  // Mounted only when enabled. Otherwise /admin falls through to Express's 404.
+  if (deps.env.ADMIN_ENABLED) {
+    app.use("/admin", createAdminRouter(deps, { staticDir: options.adminStaticDir }));
   }
 
   return app;

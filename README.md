@@ -60,6 +60,7 @@ tasks - List pending tasks
 reminders - List reminders
 notes - List saved notes
 documents - List saved documents
+admin - Get a sign-in link for the admin web app
 ```
 
 9. Open [@userinfobot](https://t.me/userinfobot) from the Telegram account that will own the copilot. Copy the numeric id into `TELEGRAM_OWNER_ID`.
@@ -222,6 +223,38 @@ In the private chat, check:
 - `/status` in Telegram shows the time zone, whether the database ping worked, and whether Grok is configured. It does not show key values.
 - `ai_usage` stores token counts and a cost estimate from `XAI_INPUT_USD_PER_MILLION` and `XAI_OUTPUT_USD_PER_MILLION`.
 
+## 12. Admin web app (optional)
+
+A private web page at `/admin` for managing what the copilot stores. It is off by default. While `ADMIN_ENABLED` is not `true`, `/admin` returns 404 and the bot behaves exactly as before.
+
+The browser only talks to `/admin/api` on this server. It never receives the Supabase or xAI keys.
+
+**Sign-in.** Send `/admin` to the bot. It replies with a link that works once and expires after 10 minutes. Open it and tap **Sign in**. The session lasts 7 days from your last visit. **Settings → Sign out** ends it. Only the account in `TELEGRAM_OWNER_ID` can sign in. The Telegram Login Widget is not used, so BotFather `/setdomain` is not needed.
+
+**Locally**
+
+1. Run the migrations in `supabase/migrations` that you have not applied yet.
+2. In `.env`:
+
+```text
+ADMIN_ENABLED=true
+ADMIN_SESSION_SECRET=   # openssl rand -hex 32
+```
+
+3. Run `npm run build` once to build the page into `dist/admin`, then `npm run dev`.
+4. Send `/admin` to the bot. Without `PUBLIC_BASE_URL`, the link points to `http://localhost:3000`.
+
+To work on the page with hot reload, keep `npm run dev` running and also start `npm run dev:admin`. Open `http://localhost:5173/admin/`. API calls are forwarded to port 3000. The sign-in link from the bot still points to port 3000, so change the port in the link to 5173 before you open it.
+
+**On Render**
+
+1. Apply the new migrations in the Supabase SQL editor.
+2. In the service's **Environment** settings, set `ADMIN_ENABLED=true` and `ADMIN_SESSION_SECRET` to a new random value of at least 32 characters. `render.yaml` lists both keys with `sync: false`, so you enter the values in the dashboard.
+3. Redeploy. `npm run build` builds the admin page with the server.
+4. Send `/admin` to the bot. The link uses `PUBLIC_BASE_URL`.
+
+If you change `ADMIN_SESSION_SECRET`, every open session and unused sign-in link stops working.
+
 ## Commands you will use
 
 ```bash
@@ -230,7 +263,8 @@ npm run dev          # local server and Telegram polling
 npm run typecheck    # TypeScript
 npm run lint         # ESLint
 npm test             # automated tests
-npm run build        # compile to dist/
+npm run build        # compile to dist/ and build the admin page into dist/admin
+npm run dev:admin    # admin page with hot reload (needs npm run dev too)
 npm start            # run the compiled app
 ```
 

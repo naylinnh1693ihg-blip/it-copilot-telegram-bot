@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { IntentSchema, type Intent } from "../types/intent.js";
 import type {
+  AdminSession,
   AuditEntry,
   ConversationTurn,
   Delivery,
@@ -15,9 +16,10 @@ import type {
   TaskEvent,
   UsageEntry,
   User,
+  UserRole,
 } from "../types/models.js";
 import { SAVED_TEXT_MIN_SIMILARITY, cosineSimilarity, hybridScore, lexicalSimilarity, trigramWordSimilarity } from "./similarity.js";
-import type { ChunkHit, ChunkSource, CompletedTask, Database, MemoryQuery, NewDocument, NewEquipment, NewKnowledge, NewMemory, NewNote, NewReminder, NewTask, SavedTextHit, StoredChunk, UsageSlice } from "./types.js";
+import type { ChunkHit, ChunkSource, CompletedTask, Database, MemoryQuery, NewAdminLoginToken, NewAdminSession, NewDocument, NewEquipment, NewKnowledge, NewMemory, NewNote, NewReminder, NewTask, SavedTextHit, StoredChunk, UsageSlice } from "./types.js";
 
 interface Counters {
   task: number;
@@ -45,6 +47,11 @@ function timeMs(iso: string): number {
   return Number.isNaN(value) ? 0 : value;
 }
 
+function publicSession(session: AdminSession & { sessionHash: string }): AdminSession {
+  const { sessionHash: _hash, ...rest } = session;
+  return { ...rest };
+}
+
 export class MemoryDatabase implements Database {
   private users: User[] = [];
   private counters = new Map<string, Counters>();
@@ -67,6 +74,8 @@ export class MemoryDatabase implements Database {
   private turns: ConversationTurn[] = [];
   private audits: AuditEntry[] = [];
   private usage: UsageEntry[] = [];
+  private loginTokens: Array<NewAdminLoginToken & { usedAt: string | null }> = [];
+  private sessions: Array<AdminSession & { sessionHash: string }> = [];
 
   async ping(): Promise<{ ok: boolean; reason: string }> {
     return { ok: true, reason: "memory" };
@@ -96,6 +105,7 @@ export class MemoryDatabase implements Database {
     const user: User = {
       id: randomUUID(),
       telegramUserId: input.telegramUserId,
+      role: "user",
       displayName: input.displayName,
       timezone: input.timezone,
       startedBot: input.startedBot,
@@ -111,6 +121,11 @@ export class MemoryDatabase implements Database {
 
   async findUserById(id: string): Promise<User | null> {
     return copy(this.users.find((user) => user.id === id) ?? null);
+  }
+
+  async setUserRole(userId: string, role: UserRole): Promise<void> {
+    const user = this.users.find((item) => item.id === userId);
+    if (user) user.role = role;
   }
 
   async setLastNotifiedReminder(userId: string, reminderId: string | null, at: string): Promise<void> {
@@ -576,6 +591,59 @@ export class MemoryDatabase implements Database {
 
   async writeAudit(entry: Omit<AuditEntry, "id">): Promise<void> {
     this.audits.push({ ...entry, id: randomUUID() });
+  }
+
+  async listAudit(userId: string, limit: number): Promise<AuditEntry[]> {
+    return this.audits
+      .filter((entry) => entry.userId === userId)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .slice(0, limit)
+      .map((entry) => copy(entry));
+  }
+
+  async insertAdminLoginToken(input: NewAdminLoginToken): Promise<void> {
+    if (this.loginTokens.some((token) => token.tokenHash === input.tokenHash)) throw new Error("Duplicate login token.");
+    this.loginTokens.push({ ...input, usedAt: null });
+  }
+
+  async consumeAdminLoginToken(tokenHash: string, nowIso: string): Promise<string | null> {
+    const token = this.loginTokens.find((item) => item.tokenHash === tokenHash);
+    if (!token || token.usedAt || Date.parse(token.expiresAt) <= Date.parse(nowIso)) return null;
+    token.usedAt = nowIso;
+    return token.userId;
+  }
+
+  async insertAdminSession(input: NewAdminSession): Promise<AdminSession> {
+    const session = {
+      id: randomUUID(),
+      userId: input.userId,
+      sessionHash: input.sessionHash,
+      userAgent: input.userAgent,
+      createdAt: input.createdAt,
+      lastSeenAt: input.createdAt,
+      expiresAt: input.expiresAt,
+      revokedAt: null,
+    };
+    this.sessions.push(session);
+    return publicSession(session);
+  }
+
+  async findAdminSession(sessionHash: string, nowIso: string): Promise<AdminSession | null> {
+    const session = this.sessions.find((item) => item.sessionHash === sessionHash);
+    if (!session || session.revokedAt || Date.parse(session.expiresAt) <= Date.parse(nowIso)) return null;
+    return publicSession(session);
+  }
+
+  async touchAdminSession(sessionId: string, lastSeenAt: string, expiresAt: string): Promise<void> {
+    const session = this.sessions.find((item) => item.id === sessionId);
+    if (!session) return;
+    session.lastSeenAt = lastSeenAt;
+    session.expiresAt = expiresAt;
+  }
+
+  async revokeAdminSession(sessionId: string, userId: string, nowIso: string): Promise<void> {
+    const session = this.sessions.find((item) => item.id === sessionId && item.userId === userId);
+    if (session && !session.revokedAt) session.revokedAt = nowIso;
   }
 
   async recordUsage(entry: Omit<UsageEntry, "id">): Promise<void> {

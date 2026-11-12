@@ -15,6 +15,7 @@ import { toIso } from "../utils/time.js";
 import { tasksPhrase } from "./commands/arguments.js";
 import { buildStatus, createLiveAnalysis, currentUser, keepTyping, rememberUser, sendReply } from "./handlers/messages.js";
 import { applyReminderButton, parseReminderCallback } from "../services/reminders/buttons.js";
+import { issueLoginLink, LOGIN_TOKEN_MINUTES } from "../services/admin/auth.js";
 
 function captionPlan(caption: string | undefined, filename: string): { title: string; summarize: boolean } {
   const text = caption?.trim() ?? "";
@@ -99,6 +100,18 @@ export function createBot(token: string, deps: Deps): Bot {
   bot.command("remember", (ctx) => runText(deps, ctx, `Remember that ${String(ctx.match).trim()}`));
   bot.command("memories", (ctx) => runText(deps, ctx, "list memories"));
   bot.command("forget", (ctx) => runText(deps, ctx, `forget ${String(ctx.match).trim()}`));
+  bot.command("admin", async (ctx) => {
+    const link = await issueLoginLink(deps, currentUser(ctx));
+    if (!link.ok) {
+      await ctx.reply(link.message);
+      return;
+    }
+    // Previews stay off: a preview fetch must never be able to spend the one-time link.
+    await ctx.reply(
+      `Open the admin app:\n${link.url}\n\nThis link works once and expires in ${LOGIN_TOKEN_MINUTES} minutes. Don't forward it.`,
+      { link_preview_options: { is_disabled: true } },
+    );
+  });
   bot.command("notes", async (ctx) => {
     const notes = await deps.db.listNotes(currentUser(ctx).id);
     await ctx.reply(notes.length ? notes.slice(-10).map((note) => `${note.noteNumber}. ${note.title}`).join("\n") : "You have no saved notes.");

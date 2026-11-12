@@ -3,9 +3,13 @@ export type Priority = "low" | "normal" | "high" | "urgent";
 export type ReminderKind = "once" | "daily" | "weekly" | "interval" | "daily_summary";
 export type ReminderStatus = "active" | "completed" | "cancelled" | "failed";
 
+/** owner: TELEGRAM_OWNER_ID. admin: may use the admin app. user: bot only. */
+export type UserRole = "owner" | "admin" | "user";
+
 export interface User {
   id: string;
   telegramUserId: number;
+  role: UserRole;
   displayName: string | null;
   timezone: string;
   startedBot: boolean;
@@ -174,6 +178,16 @@ export interface Memory {
   updatedAt: string;
   expiresAt: string | null;
   deletedAt: string | null;
+}
+
+export interface AdminSession {
+  id: string;
+  userId: string;
+  userAgent: string | null;
+  createdAt: string;
+  lastSeenAt: string;
+  expiresAt: string;
+  revokedAt: string | null;
 }
 
 export interface AuditEntry {

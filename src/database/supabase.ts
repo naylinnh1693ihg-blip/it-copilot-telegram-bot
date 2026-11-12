@@ -1,6 +1,8 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { IntentSchema, type Intent } from "../types/intent.js";
 import type {
+  AdminSession,
+  AuditEntry,
   ConversationTurn,
   DocumentRecord,
   Equipment,
@@ -19,10 +21,11 @@ import type {
   TaskEvent,
   TaskStatus,
   User,
+  UserRole,
 } from "../types/models.js";
 import { DatabaseError } from "../utils/errors.js";
 import { redactString } from "../utils/text.js";
-import type { ChunkHit, ChunkSource, CompletedTask, Database, MemoryQuery, NewDocument, NewEquipment, NewKnowledge, NewMemory, NewNote, NewReminder, NewTask, SavedTextHit, StoredChunk, UsageSlice } from "./types.js";
+import type { ChunkHit, ChunkSource, CompletedTask, Database, MemoryQuery, NewAdminLoginToken, NewAdminSession, NewDocument, NewEquipment, NewKnowledge, NewMemory, NewNote, NewReminder, NewTask, SavedTextHit, StoredChunk, UsageSlice } from "./types.js";
 
 type Row = Record<string, unknown>;
 
@@ -158,6 +161,7 @@ function userFrom(row: Row, dailySummaryLocalTime: string | null): User {
   return {
     id: text(row, "id"),
     telegramUserId: integer(row, "telegram_user_id"),
+    role: userRole(textOrNull(row, "role")),
     displayName: textOrNull(row, "display_name"),
     timezone: text(row, "timezone"),
     startedBot: row.started_bot === true,
@@ -165,6 +169,35 @@ function userFrom(row: Row, dailySummaryLocalTime: string | null): User {
     dailySummaryLocalTime,
     createdAt: text(row, "created_at"),
     updatedAt: text(row, "updated_at"),
+  };
+}
+
+function userRole(value: string | null): UserRole {
+  if (value === "owner" || value === "admin") return value;
+  return "user";
+}
+
+function adminSessionFrom(row: Row): AdminSession {
+  return {
+    id: text(row, "id"),
+    userId: text(row, "user_id"),
+    userAgent: textOrNull(row, "user_agent"),
+    createdAt: text(row, "created_at"),
+    lastSeenAt: text(row, "last_seen_at"),
+    expiresAt: text(row, "expires_at"),
+    revokedAt: textOrNull(row, "revoked_at"),
+  };
+}
+
+function auditFrom(row: Row): AuditEntry {
+  return {
+    id: text(row, "id"),
+    userId: textOrNull(row, "user_id"),
+    action: text(row, "action"),
+    entity: text(row, "entity"),
+    entityId: textOrNull(row, "entity_id"),
+    metadata: metadataFrom(row.metadata),
+    createdAt: text(row, "created_at"),
   };
 }
 
@@ -332,6 +365,11 @@ export class SupabaseDatabase implements Database {
     this.raise(error);
     if (!isRow(data)) return null;
     return this.hydrate(data);
+  }
+
+  async setUserRole(userId: string, role: UserRole): Promise<void> {
+    const { error } = await this.client.from("users").update({ role }).eq("id", userId);
+    this.raise(error);
   }
 
   async setLastNotifiedReminder(userId: string, reminderId: string | null, _at: string): Promise<void> {
@@ -1068,6 +1106,90 @@ export class SupabaseDatabase implements Database {
       metadata: entry.metadata,
       created_at: entry.createdAt,
     });
+    this.raise(error);
+  }
+
+  async listAudit(userId: string, limit: number): Promise<AuditEntry[]> {
+    const { data, error } = await this.client
+      .from("audit_logs")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    this.raise(error);
+    return rows(data).map(auditFrom);
+  }
+
+  async insertAdminLoginToken(input: NewAdminLoginToken): Promise<void> {
+    const { error } = await this.client.from("admin_login_tokens").insert({
+      user_id: input.userId,
+      token_hash: input.tokenHash,
+      created_at: input.createdAt,
+      expires_at: input.expiresAt,
+    });
+    this.raise(error);
+  }
+
+  async consumeAdminLoginToken(tokenHash: string, nowIso: string): Promise<string | null> {
+    // One UPDATE statement, so two requests with the same token cannot both succeed.
+    const { data, error } = await this.client
+      .from("admin_login_tokens")
+      .update({ used_at: nowIso })
+      .eq("token_hash", tokenHash)
+      .is("used_at", null)
+      .gt("expires_at", nowIso)
+      .select("user_id");
+    this.raise(error);
+    const row = rows(data)[0];
+    return row ? text(row, "user_id") : null;
+  }
+
+  async insertAdminSession(input: NewAdminSession): Promise<AdminSession> {
+    const { data, error } = await this.client
+      .from("admin_sessions")
+      .insert({
+        user_id: input.userId,
+        session_hash: input.sessionHash,
+        user_agent: input.userAgent,
+        created_at: input.createdAt,
+        last_seen_at: input.createdAt,
+        expires_at: input.expiresAt,
+      })
+      .select("id, user_id, user_agent, created_at, last_seen_at, expires_at, revoked_at")
+      .single();
+    this.raise(error);
+    if (!isRow(data)) throw new DatabaseError("Could not start the admin session.");
+    return adminSessionFrom(data);
+  }
+
+  async findAdminSession(sessionHash: string, nowIso: string): Promise<AdminSession | null> {
+    const { data, error } = await this.client
+      .from("admin_sessions")
+      .select("id, user_id, user_agent, created_at, last_seen_at, expires_at, revoked_at")
+      .eq("session_hash", sessionHash)
+      .is("revoked_at", null)
+      .gt("expires_at", nowIso)
+      .maybeSingle();
+    this.raise(error);
+    return isRow(data) ? adminSessionFrom(data) : null;
+  }
+
+  async touchAdminSession(sessionId: string, lastSeenAt: string, expiresAt: string): Promise<void> {
+    const { error } = await this.client
+      .from("admin_sessions")
+      .update({ last_seen_at: lastSeenAt, expires_at: expiresAt })
+      .eq("id", sessionId)
+      .is("revoked_at", null);
+    this.raise(error);
+  }
+
+  async revokeAdminSession(sessionId: string, userId: string, nowIso: string): Promise<void> {
+    const { error } = await this.client
+      .from("admin_sessions")
+      .update({ revoked_at: nowIso })
+      .eq("id", sessionId)
+      .eq("user_id", userId)
+      .is("revoked_at", null);
     this.raise(error);
   }
 

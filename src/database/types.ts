@@ -1,5 +1,6 @@
 import type { Intent } from "../types/intent.js";
 import type {
+  AdminSession,
   AuditEntry,
   ConversationTurn,
   DocumentRecord,
@@ -19,6 +20,7 @@ import type {
   TaskStatus,
   UsageEntry,
   User,
+  UserRole,
 } from "../types/models.js";
 
 export interface NewTask {
@@ -167,6 +169,21 @@ export interface SavedTextHit {
   similarity: number;
 }
 
+export interface NewAdminLoginToken {
+  userId: string;
+  tokenHash: string;
+  createdAt: string;
+  expiresAt: string;
+}
+
+export interface NewAdminSession {
+  userId: string;
+  sessionHash: string;
+  userAgent: string | null;
+  createdAt: string;
+  expiresAt: string;
+}
+
 export interface Database {
   ping(): Promise<{ ok: boolean; reason: string }>;
   upsertFromTelegram(input: {
@@ -177,6 +194,7 @@ export interface Database {
     at: string;
   }): Promise<User>;
   findUserById(id: string): Promise<User | null>;
+  setUserRole(userId: string, role: UserRole): Promise<void>;
   setLastNotifiedReminder(userId: string, reminderId: string | null, at: string): Promise<void>;
   setDailySummaryTime(userId: string, time: string | null, at: string): Promise<void>;
   insertTask(input: NewTask): Promise<Task>;
@@ -245,6 +263,16 @@ export interface Database {
   appendTurn(userId: string, role: "user" | "assistant", content: string, at: string): Promise<void>;
   recentTurns(userId: string, limit: number): Promise<ConversationTurn[]>;
   writeAudit(entry: Omit<AuditEntry, "id">): Promise<void>;
+  /** Newest first. */
+  listAudit(userId: string, limit: number): Promise<AuditEntry[]>;
+  insertAdminLoginToken(input: NewAdminLoginToken): Promise<void>;
+  /** Marks an unused, unexpired token as used in one statement. Returns its user id, or null. */
+  consumeAdminLoginToken(tokenHash: string, nowIso: string): Promise<string | null>;
+  insertAdminSession(input: NewAdminSession): Promise<AdminSession>;
+  /** An unrevoked session whose expires_at is after nowIso. */
+  findAdminSession(sessionHash: string, nowIso: string): Promise<AdminSession | null>;
+  touchAdminSession(sessionId: string, lastSeenAt: string, expiresAt: string): Promise<void>;
+  revokeAdminSession(sessionId: string, userId: string, nowIso: string): Promise<void>;
   recordUsage(entry: Omit<UsageEntry, "id">): Promise<void>;
   /** Usage in [fromInclusive, untilExclusive). One entry per stored request. */
   listUsage(userId: string, fromInclusive: string, untilExclusive: string): Promise<UsageSlice[]>;
