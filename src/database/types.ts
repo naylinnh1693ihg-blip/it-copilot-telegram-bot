@@ -4,6 +4,8 @@ import type {
   ConversationTurn,
   DocumentRecord,
   Equipment,
+  Memory,
+  MemoryType,
   Extraction,
   KnowledgeEntry,
   Note,
@@ -74,6 +76,23 @@ export interface NewDocument {
   category: string;
   tags: string[];
   createdAt: string;
+}
+
+export interface NewMemory {
+  userId: string;
+  content: string;
+  memoryType: MemoryType;
+  importance: number | null;
+  metadata: Record<string, string | number | boolean | null>;
+  createdAt: string;
+  expiresAt: string | null;
+}
+
+export interface MemoryQuery {
+  limit: number;
+  memoryType?: MemoryType | null;
+  includeExpired?: boolean;
+  nowIso: string;
 }
 
 export interface NewEquipment {
@@ -202,6 +221,13 @@ export interface Database {
   listDocuments(userId: string): Promise<DocumentRecord[]>;
   searchDocuments(userId: string, query: string): Promise<DocumentRecord[]>;
   searchSavedText(userId: string, query: string): Promise<SavedTextHit[]>;
+  insertMemory(input: NewMemory): Promise<Memory>;
+  updateMemory(memory: Memory): Promise<Memory>;
+  findMemory(userId: string, memoryNumber: number): Promise<Memory | null>;
+  listMemories(userId: string, options: MemoryQuery): Promise<Memory[]>;
+  searchMemories(userId: string, query: string, options: MemoryQuery): Promise<Memory[]>;
+  /** Marks memories whose expires_at has passed. Safe to run more than once. */
+  deleteExpiredMemories(userId: string, nowIso: string): Promise<number>;
   insertEquipment(input: NewEquipment): Promise<Equipment>;
   updateEquipment(item: Equipment): Promise<Equipment>;
   listEquipment(userId: string): Promise<Equipment[]>;

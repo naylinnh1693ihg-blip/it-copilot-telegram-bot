@@ -96,6 +96,9 @@ export function createBot(token: string, deps: Deps): Bot {
   });
   bot.command("tasks", (ctx) => runText(deps, ctx, tasksPhrase(String(ctx.match).trim())));
   bot.command("reminders", (ctx) => runText(deps, ctx, "list my reminders"));
+  bot.command("remember", (ctx) => runText(deps, ctx, `Remember that ${String(ctx.match).trim()}`));
+  bot.command("memories", (ctx) => runText(deps, ctx, "list memories"));
+  bot.command("forget", (ctx) => runText(deps, ctx, `forget ${String(ctx.match).trim()}`));
   bot.command("notes", async (ctx) => {
     const notes = await deps.db.listNotes(currentUser(ctx).id);
     await ctx.reply(notes.length ? notes.slice(-10).map((note) => `${note.noteNumber}. ${note.title}`).join("\n") : "You have no saved notes.");

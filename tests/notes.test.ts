@@ -11,7 +11,9 @@ describe("notes and knowledge", () => {
     const { deps, db } = testDeps();
     const user = await owner(db);
     const saved = await handleText(deps, user, "Remember this: The meeting room printer uses a static IP.");
-    expect(saved.text).toContain("Saved note 1");
+    expect(saved.text).toContain("Saved memory 1");
+    expect(await db.listNotes(user.id)).toHaveLength(0);
+    await handleText(deps, user, "note this: The meeting room printer uses a static IP.");
     const found = await handleText(deps, user, "Find my old notes about DHCP.");
     expect(found.text).toContain("don't have anything saved");
     const printer = await handleText(deps, user, "What information did I save about the printer?");
@@ -209,7 +211,7 @@ describe("notes and knowledge", () => {
     expect(refused.text).toContain("didn't save");
     expect(await db.listNotes(user.id)).toHaveLength(0);
     expect(secretRisk("api_key=abcd1234")).toBeTruthy();
-    await handleText(deps, user, "Remember this: Clear the print queue before replacing toner.");
+    await handleText(deps, user, "note this: Clear the print queue before replacing toner.");
     const ask = await handleText(deps, user, "Delete note 1.");
     expect(ask.text).toContain("YES");
     expect(await db.listNotes(user.id)).toHaveLength(1);

@@ -103,7 +103,7 @@ describe("rag", () => {
       debug() {},
     };
     const user = await owner(db);
-    await handleText(deps, user, "Remember this: VLAN 20 is the guest network.");
+    await handleText(deps, user, "note this: VLAN 20 is the guest network.");
     const reply = await handleText(deps, user, "What is VLAN 20?");
     expect(calls).toEqual(["text"]);
     expect(events).toEqual(["1"]);
@@ -123,7 +123,7 @@ describe("rag", () => {
       },
     } satisfies LlmClient;
     const user = await owner(db);
-    await handleText(deps, user, "Remember this: The floor 2 printer uses IP address 192.168.1.10.");
+    await handleText(deps, user, "note this: The floor 2 printer uses IP address 192.168.1.10.");
 
     const reply = await answerWithRag(deps, user, "What's the IP of the floor 2 printer?");
 
@@ -147,7 +147,7 @@ describe("rag", () => {
       },
     };
     const user = await owner(db);
-    await handleText(deps, user, "Remember this: The switch management VLAN is 21.");
+    await handleText(deps, user, "note this: The switch management VLAN is 21.");
 
     const reply = await answerWithRag(deps, user, "What is the switch management VLAN?");
 
@@ -171,7 +171,7 @@ describe("rag", () => {
       },
     };
     const user = await owner(db);
-    await handleText(deps, user, "Remember this: The floor 2 printer is near reception.");
+    await handleText(deps, user, "note this: The floor 2 printer is near reception.");
     const previews: string[] = [];
 
     const reply = await answerWithRag(deps, user, "Where is the floor 2 printer?", async (text) => {
@@ -196,7 +196,7 @@ describe("rag", () => {
       },
     };
     const user = await owner(db);
-    await handleText(deps, user, "Remember this: the visitor segment is vlan twenty.");
+    await handleText(deps, user, "note this: the visitor segment is vlan twenty.");
     const reply = await handleText(deps, user, "Where should guests connect?");
     expect(reply.text).toContain("Guests use VLAN 20.");
     expect(reply.text).toContain("From note #1");
@@ -254,7 +254,7 @@ describe("rag", () => {
       },
     };
     const user = await owner(db);
-    await handleText(deps, user, "Remember this: VLAN 20 is the guest network.");
+    await handleText(deps, user, "note this: VLAN 20 is the guest network.");
     await handleText(deps, user, "Update my VLAN notes: it is also on floor 2.");
     const reply = await handleText(deps, user, "What is VLAN 20?");
     expect(reply.text).toContain("floor 2");

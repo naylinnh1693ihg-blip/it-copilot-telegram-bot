@@ -150,6 +150,22 @@ export interface ConversationTurn {
   createdAt: string;
 }
 
+export type MemoryType = "preference" | "fact" | "context" | "equipment";
+
+export interface Memory {
+  id: string;
+  userId: string;
+  memoryNumber: number;
+  content: string;
+  memoryType: MemoryType;
+  importance: number | null;
+  metadata: Record<string, string | number | boolean | null>;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string | null;
+  deletedAt: string | null;
+}
+
 export interface AuditEntry {
   id: string;
   userId: string | null;

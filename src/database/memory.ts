@@ -6,6 +6,7 @@ import type {
   Delivery,
   DocumentRecord,
   Equipment,
+  Memory,
   Extraction,
   KnowledgeEntry,
   Note,
@@ -16,7 +17,7 @@ import type {
   User,
 } from "../types/models.js";
 import { SAVED_TEXT_MIN_SIMILARITY, cosineSimilarity, hybridScore, lexicalSimilarity, trigramWordSimilarity } from "./similarity.js";
-import type { ChunkHit, ChunkSource, CompletedTask, Database, NewDocument, NewEquipment, NewKnowledge, NewNote, NewReminder, NewTask, SavedTextHit, StoredChunk, UsageSlice } from "./types.js";
+import type { ChunkHit, ChunkSource, CompletedTask, Database, MemoryQuery, NewDocument, NewEquipment, NewKnowledge, NewMemory, NewNote, NewReminder, NewTask, SavedTextHit, StoredChunk, UsageSlice } from "./types.js";
 
 interface Counters {
   task: number;
@@ -25,6 +26,7 @@ interface Counters {
   knowledge: number;
   document: number;
   equipment: number;
+  memory: number;
 }
 
 function copy<T>(value: T): T {
@@ -46,6 +48,7 @@ function timeMs(iso: string): number {
 export class MemoryDatabase implements Database {
   private users: User[] = [];
   private counters = new Map<string, Counters>();
+  private memories: Memory[] = [];
   private tasks: Task[] = [];
   private events: TaskEvent[] = [];
   private reminders: Reminder[] = [];
@@ -70,7 +73,7 @@ export class MemoryDatabase implements Database {
   }
 
   private nextCounter(userId: string, kind: keyof Counters): number {
-    const current = this.counters.get(userId) ?? { task: 0, reminder: 0, note: 0, knowledge: 0, document: 0, equipment: 0 };
+    const current = this.counters.get(userId) ?? { task: 0, reminder: 0, note: 0, knowledge: 0, document: 0, equipment: 0, memory: 0 };
     current[kind] += 1;
     this.counters.set(userId, current);
     return current[kind];
@@ -102,7 +105,7 @@ export class MemoryDatabase implements Database {
       updatedAt: input.at,
     };
     this.users.push(user);
-    this.counters.set(user.id, { task: 0, reminder: 0, note: 0, knowledge: 0, document: 0, equipment: 0 });
+    this.counters.set(user.id, { task: 0, reminder: 0, note: 0, knowledge: 0, document: 0, equipment: 0, memory: 0 });
     return copy(user);
   }
 
@@ -429,6 +432,76 @@ export class MemoryDatabase implements Database {
     const index = this.extractions.findIndex((item) => item.documentId === extraction.documentId);
     if (index >= 0) this.extractions[index] = copy(extraction);
     else this.extractions.push(copy(extraction));
+  }
+
+  async insertMemory(input: NewMemory): Promise<Memory> {
+    const memory: Memory = {
+      id: randomUUID(),
+      userId: input.userId,
+      memoryNumber: this.nextCounter(input.userId, "memory"),
+      content: input.content,
+      memoryType: input.memoryType,
+      importance: input.importance,
+      metadata: { ...input.metadata },
+      createdAt: input.createdAt,
+      updatedAt: input.createdAt,
+      expiresAt: input.expiresAt,
+      deletedAt: null,
+    };
+    this.memories.push(memory);
+    return copy(memory);
+  }
+
+  async updateMemory(memory: Memory): Promise<Memory> {
+    const index = this.memories.findIndex((item) => item.id === memory.id && item.userId === memory.userId);
+    if (index < 0) throw new Error("Memory was not found.");
+    this.memories[index] = copy(memory);
+    return copy(memory);
+  }
+
+  async findMemory(userId: string, memoryNumber: number): Promise<Memory | null> {
+    return copy(this.memories.find((memory) => memory.userId === userId && memory.memoryNumber === memoryNumber && !memory.deletedAt) ?? null);
+  }
+
+  async listMemories(userId: string, options: MemoryQuery): Promise<Memory[]> {
+    return this.memories
+      .filter((memory) => this.memoryVisible(memory, userId, options))
+      .sort((left, right) => right.memoryNumber - left.memoryNumber)
+      .slice(0, options.limit)
+      .map((memory) => copy(memory));
+  }
+
+  async searchMemories(userId: string, query: string, options: MemoryQuery): Promise<Memory[]> {
+    const terms = query.toLowerCase().match(/[a-z0-9]+/g)?.filter((term) => term.length > 1) ?? [];
+    return this.memories
+      .filter((memory) => {
+        if (!this.memoryVisible(memory, userId, options)) return false;
+        const haystack = memory.content.toLowerCase();
+        return terms.length === 0 || terms.every((term) => haystack.includes(term));
+      })
+      .sort((left, right) => right.memoryNumber - left.memoryNumber)
+      .slice(0, options.limit)
+      .map((memory) => copy(memory));
+  }
+
+  async deleteExpiredMemories(userId: string, nowIso: string): Promise<number> {
+    const now = Date.parse(nowIso);
+    let count = 0;
+    for (const memory of this.memories) {
+      if (memory.userId !== userId || memory.deletedAt || !memory.expiresAt) continue;
+      if (Date.parse(memory.expiresAt) > now) continue;
+      memory.deletedAt = nowIso;
+      memory.updatedAt = nowIso;
+      count += 1;
+    }
+    return count;
+  }
+
+  private memoryVisible(memory: Memory, userId: string, options: MemoryQuery): boolean {
+    if (memory.userId !== userId || memory.deletedAt) return false;
+    if (options.memoryType && memory.memoryType !== options.memoryType) return false;
+    if (options.includeExpired) return true;
+    return !memory.expiresAt || Date.parse(memory.expiresAt) > Date.parse(options.nowIso);
   }
 
   async insertEquipment(input: NewEquipment): Promise<Equipment> {

@@ -86,7 +86,7 @@ describe("equipment", () => {
     deps.llm = throwingLlm();
     const user = await owner(db);
     const note = await handleText(deps, user, "Remember this: The meeting room printer uses a static IP.");
-    expect(note.text).toContain("Saved note");
+    expect(note.text).toContain("Saved memory");
     expect(await db.listEquipment(user.id)).toHaveLength(0);
     const tasks = await handleText(deps, user, "Show my pending tasks.");
     expect(tasks.text.toLowerCase()).toContain("no pending");
@@ -123,7 +123,7 @@ describe("equipment", () => {
       debug() {},
     };
     const user = await owner(db);
-    await handleText(deps, user, "Remember this: Core switch lives in the MDF at 192.168.1.50.");
+    await handleText(deps, user, "note this: Core switch lives in the MDF at 192.168.1.50.");
 
     const fromNote = await handleText(deps, user, "Extract equipment from note 1");
     expect(schemas).toEqual(["equipment_cards"]);

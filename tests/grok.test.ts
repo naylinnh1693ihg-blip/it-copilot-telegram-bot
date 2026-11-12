@@ -292,7 +292,7 @@ describe("grok client", () => {
     const tasks = await handleText(deps, user, "Show my pending tasks.");
     expect(tasks.text).toContain("no pending tasks");
     const note = await handleText(deps, user, "Remember this: The meeting room printer uses a static IP.");
-    expect(note.text).toContain("Saved note");
+    expect(note.text).toContain("Saved memory");
     const reminders = await handleText(deps, user, "list my reminders");
     expect(reminders.text).toContain("no active reminders");
   });
@@ -300,7 +300,7 @@ describe("grok client", () => {
   it("answers from saved records before searching the web", async () => {
     const { deps, db } = testDeps();
     const user = await owner(db);
-    await handleText(deps, user, "Remember this: The meeting room printer uses a static IP.");
+    await handleText(deps, user, "note this: The meeting room printer uses a static IP.");
     let webSearchRequested = false;
     let prompt = "";
     deps.llm = {
@@ -331,7 +331,7 @@ describe("grok client", () => {
   it("keeps an explicit web search and includes a matching saved record", async () => {
     const { deps, db } = testDeps();
     const user = await owner(db);
-    await handleText(deps, user, "Remember this: The team keeps Git documentation on the internal wiki.");
+    await handleText(deps, user, "note this: The team keeps Git documentation on the internal wiki.");
     let webSearchRequested = false;
     let prompt = "";
     deps.llm = {

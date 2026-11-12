@@ -47,9 +47,13 @@ export function matchTaskList(plain: string): Intent | null {
   return null;
 }
 
-const NOTE_FORMS = [
+const MEMORY_FORMS = [
   /^(?:please\s+)?remember this\s*[:,-]?\s*(.*)$/i,
   /^(?:please\s+)?remember\s*:\s*(.*)$/i,
+  /^(?:please\s+)?remember that\s+(.*)$/i,
+];
+
+const NOTE_FORMS = [
   /^(?:please\s+)?note this\s*[:,-]?\s*(.*)$/i,
   /^(?:please\s+)?note\s*:\s*(.*)$/i,
   /^(?:please\s+)?save this\s*[:,-]?\s*(.*)$/i,
@@ -83,7 +87,14 @@ export function matchSaveNote(plain: string): Intent | null {
     });
   }
   if (/^remember how\b/i.test(plain)) {
-    return clarify("What should I remember about that? Send the steps or the fix, starting with 'Remember this:'.");
+    return clarify("What should I remember about that? Send the fact after 'Remember that'.");
+  }
+  for (const form of MEMORY_FORMS) {
+    const match = plain.match(form);
+    if (!match) continue;
+    const body = match[1]?.trim() ?? "";
+    if (!body) return clarify("What should I remember? Add the fact after 'Remember that'.");
+    return blankIntent({ intent: "save_note", details: body, title: body, tags: "memory" });
   }
   for (const form of NOTE_FORMS) {
     const match = plain.match(form);
@@ -121,7 +132,33 @@ export function matchExtensionLookup(plain: string): Intent | null {
   return blankIntent({ intent: "search_notes", search_query: name, tags: "extension" });
 }
 
-export const DAILY_MATCHERS: DailyMatcher[] = [matchClosedToday, matchWeekCost, matchExtensionLookup, matchTaskList, matchSaveNote];
+/** "list memories", "show my memories", "memories". */
+export function matchListMemories(plain: string): Intent | null {
+  if (/^(?:please\s+)?\/?(?:(?:show|list)(?:\s+my)?\s+)?memories$/i.test(plain)) {
+    return blankIntent({ intent: "search_notes", tags: "memories" });
+  }
+  return null;
+}
+
+/** "forget 2", "forget memory 2", "forget brief answers". */
+export function matchForgetMemory(plain: string): Intent | null {
+  const numbered = plain.match(/^(?:please\s+)?\/?forget(?:\s+memory)?\s+#?(\d+)$/i);
+  if (numbered?.[1]) return blankIntent({ intent: "delete_note", entity_number: Number(numbered[1]), tags: "memory" });
+  const text = plain.match(/^(?:please\s+)?\/?forget(?:\s+that)?\s+(.+)$/i);
+  if (text?.[1]) return blankIntent({ intent: "delete_note", search_query: text[1].trim(), tags: "memory" });
+  if (/^(?:please\s+)?forget$/i.test(plain)) return clarify("Which memory should I forget? Send /forget 2 or /forget brief answers.");
+  return null;
+}
+
+export const DAILY_MATCHERS: DailyMatcher[] = [
+  matchClosedToday,
+  matchWeekCost,
+  matchExtensionLookup,
+  matchListMemories,
+  matchForgetMemory,
+  matchTaskList,
+  matchSaveNote,
+];
 
 export function matchDailyIntent(plain: string): Intent | null {
   for (const match of DAILY_MATCHERS) {

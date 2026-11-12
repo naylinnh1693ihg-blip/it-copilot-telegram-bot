@@ -26,7 +26,7 @@ describe("note links", () => {
     const saved = await handleText(
       deps,
       user,
-      "Remember this: Task 1 is waiting on Network-Map.pdf. The backup window is 2 AM.",
+      "note this: Task 1 is waiting on Network-Map.pdf. The backup window is 2 AM.",
     );
     expect(saved.text).toContain("Saved note 1");
     expect(saved.text).toContain("Linked to task 1 and document 1.");
@@ -45,7 +45,7 @@ describe("note links", () => {
     const user = await owner(deps.db);
     await handleText(deps, user, "Create a task to replace the toner.");
     await handleText(deps, user, "Mark task 1 as in progress.");
-    const saved = await handleText(deps, user, "Remember this: The spare toner is in the MDF cabinet.");
+    const saved = await handleText(deps, user, "note this: The spare toner is in the MDF cabinet.");
     expect(saved.text).toContain("Linked to task 1.");
   });
 

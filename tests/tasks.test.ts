@@ -151,12 +151,12 @@ describe("tasks", () => {
     expect(await db.listNotes(user.id)).toHaveLength(0);
 
     const saved = await handleText(deps, user, "remember: The meeting room printer uses a static IP.");
-    expect(saved.text).toContain("Saved note 1");
+    expect(saved.text).toContain("Saved memory 1");
     const noted = await handleText(deps, user, "note this: Check the UPS nightly.");
-    expect(noted.text).toContain("Saved note 2");
+    expect(noted.text).toContain("Saved note 1");
     const savedThis = await handleText(deps, user, "save this: VLAN 20 is the guest network.");
-    expect(savedThis.text).toContain("Saved note 3");
-    expect(await db.listNotes(user.id)).toHaveLength(3);
+    expect(savedThis.text).toContain("Saved note 2");
+    expect(await db.listNotes(user.id)).toHaveLength(2);
   });
 
   it("does not save a casual sentence as a task or note", async () => {

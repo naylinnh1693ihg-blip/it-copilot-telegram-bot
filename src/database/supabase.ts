@@ -5,6 +5,8 @@ import type {
   DocumentRecord,
   Equipment,
   EquipmentKind,
+  Memory,
+  MemoryType,
   Extraction,
   KnowledgeEntry,
   Note,
@@ -19,7 +21,7 @@ import type {
 } from "../types/models.js";
 import { DatabaseError } from "../utils/errors.js";
 import { redactString } from "../utils/text.js";
-import type { ChunkHit, ChunkSource, CompletedTask, Database, NewDocument, NewEquipment, NewKnowledge, NewNote, NewReminder, NewTask, SavedTextHit, StoredChunk, UsageSlice } from "./types.js";
+import type { ChunkHit, ChunkSource, CompletedTask, Database, MemoryQuery, NewDocument, NewEquipment, NewKnowledge, NewMemory, NewNote, NewReminder, NewTask, SavedTextHit, StoredChunk, UsageSlice } from "./types.js";
 
 type Row = Record<string, unknown>;
 
@@ -108,6 +110,38 @@ function equipmentFrom(row: Row): Equipment {
     updatedAt: text(row, "updated_at"),
     deletedAt: textOrNull(row, "deleted_at"),
   };
+}
+
+function memoryFrom(row: Row): Memory {
+  const kind = text(row, "memory_type");
+  const importance = row.importance;
+  return {
+    id: text(row, "id"),
+    userId: text(row, "user_id"),
+    memoryNumber: integer(row, "memory_number"),
+    content: text(row, "content"),
+    memoryType: memoryType(kind),
+    importance: typeof importance === "number" ? importance : null,
+    metadata: metadataFrom(row.metadata),
+    createdAt: text(row, "created_at"),
+    updatedAt: text(row, "updated_at"),
+    expiresAt: textOrNull(row, "expires_at"),
+    deletedAt: textOrNull(row, "deleted_at"),
+  };
+}
+
+function memoryType(value: string): MemoryType {
+  if (value === "preference" || value === "fact" || value === "context" || value === "equipment") return value;
+  return "fact";
+}
+
+function metadataFrom(value: unknown): Record<string, string | number | boolean | null> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const metadata: Record<string, string | number | boolean | null> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item === "string" || typeof item === "number" || typeof item === "boolean" || item === null) metadata[key] = item;
+  }
+  return metadata;
 }
 
 function userFrom(row: Row, dailySummaryLocalTime: string | null): User {
@@ -774,6 +808,95 @@ export class SupabaseDatabase implements Database {
       extracted_at: extraction.extractedAt,
     });
     this.raise(error);
+  }
+
+  async insertMemory(input: NewMemory): Promise<Memory> {
+    const memoryNumber = await this.allocate(input.userId, "memory");
+    const { data, error } = await this.client
+      .from("memories")
+      .insert({
+        user_id: input.userId,
+        memory_number: memoryNumber,
+        content: input.content,
+        memory_type: input.memoryType,
+        importance: input.importance,
+        metadata: input.metadata,
+        created_at: input.createdAt,
+        updated_at: input.createdAt,
+        expires_at: input.expiresAt,
+      })
+      .select("*")
+      .single();
+    this.raise(error);
+    if (!isRow(data)) throw new DatabaseError("Could not save memory.");
+    return memoryFrom(data);
+  }
+
+  async updateMemory(memory: Memory): Promise<Memory> {
+    const { data, error } = await this.client
+      .from("memories")
+      .update({
+        content: memory.content,
+        memory_type: memory.memoryType,
+        importance: memory.importance,
+        metadata: memory.metadata,
+        expires_at: memory.expiresAt,
+        deleted_at: memory.deletedAt,
+        updated_at: memory.updatedAt,
+      })
+      .eq("id", memory.id)
+      .eq("user_id", memory.userId)
+      .select("*")
+      .single();
+    this.raise(error);
+    if (!isRow(data)) throw new DatabaseError("Could not update memory.");
+    return memoryFrom(data);
+  }
+
+  async findMemory(userId: string, memoryNumber: number): Promise<Memory | null> {
+    const { data, error } = await this.client
+      .from("memories")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("memory_number", memoryNumber)
+      .is("deleted_at", null)
+      .maybeSingle();
+    this.raise(error);
+    return isRow(data) ? memoryFrom(data) : null;
+  }
+
+  async listMemories(userId: string, options: MemoryQuery): Promise<Memory[]> {
+    const { data, error } = await this.memorySelect(userId, options).order("memory_number", { ascending: false }).limit(options.limit);
+    this.raise(error);
+    return rows(data).map(memoryFrom);
+  }
+
+  async searchMemories(userId: string, query: string, options: MemoryQuery): Promise<Memory[]> {
+    const needle = query.replace(/[%_]/g, "").trim();
+    if (!needle) return this.listMemories(userId, options);
+    const { data, error } = await this.memorySelect(userId, options).ilike("content", `%${needle}%`).order("memory_number", { ascending: false }).limit(options.limit);
+    this.raise(error);
+    return rows(data).map(memoryFrom);
+  }
+
+  async deleteExpiredMemories(userId: string, nowIso: string): Promise<number> {
+    const { data, error } = await this.client
+      .from("memories")
+      .update({ deleted_at: nowIso, updated_at: nowIso })
+      .eq("user_id", userId)
+      .is("deleted_at", null)
+      .not("expires_at", "is", null)
+      .lte("expires_at", nowIso)
+      .select("id");
+    this.raise(error);
+    return rows(data).length;
+  }
+
+  private memorySelect(userId: string, options: MemoryQuery) {
+    let query = this.client.from("memories").select("*").eq("user_id", userId).is("deleted_at", null);
+    if (options.memoryType) query = query.eq("memory_type", options.memoryType);
+    if (!options.includeExpired) query = query.or(`expires_at.is.null,expires_at.gt.${options.nowIso}`);
+    return query;
   }
 
   async insertEquipment(input: NewEquipment): Promise<Equipment> {

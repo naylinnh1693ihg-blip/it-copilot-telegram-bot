@@ -7,6 +7,7 @@ import { buildRagContext } from "./context.js";
 import { ragConfig } from "./config.js";
 import { buildRagMessages } from "./prompt.js";
 import { hybridSearch } from "./search.js";
+import { MemoryService } from "../memory/service.js";
 import { redactString } from "../../utils/text.js";
 
 const QUESTION = /^(?:what|where|who|when|why|how|which|whose|is|are|do|does|did|can|could|should|tell me|explain)\b/i;
@@ -28,9 +29,10 @@ export async function answerWithRag(
   try {
     if (onPreview) await onPreview("Searching…");
     const hits = await hybridSearch(deps, user.id, question);
+    const memories = await new MemoryService(deps).promptBlock(user.id, question);
     const config = ragConfig(deps.env);
     const built = buildRagContext(deps.logger, hits, question, { maxTokens: config.contextTokens, minScore: config.minScore });
-    if (!built.relevant) {
+    if (!built.relevant && !memories.text) {
       deps.logger.info({ event: "rag_fallback", chunks: 0 }, "rag fallback");
       return null;
     }
@@ -41,9 +43,11 @@ export async function answerWithRag(
       `rag_search (${built.chunks} chunks)`,
     );
     deps.logger.info({ event: "rag_retrieval", chunks: built.chunks }, "retrieved knowledge chunks");
-    if (!deps.llm) return { text: withSources(built.context, built.sourcesLine) };
+    const sourcesLine = [built.relevant ? built.sourcesLine : "", memorySources(memories.numbers)].filter(Boolean).join("\n");
+    const grounded = [memories.text, built.relevant ? built.context : ""].filter(Boolean).join("\n");
+    if (!deps.llm) return { text: withSources(grounded, sourcesLine) };
 
-    const prompt = buildRagMessages(question, built.context, { sourcesLine: built.sourcesLine });
+    const prompt = buildRagMessages(question, built.relevant ? built.context : "", { sourcesLine, memories: memories.text });
     const [systemMessage, userMessage] = prompt.messages;
     const system = systemMessage?.content ?? prompt.system;
     const userText = userMessage?.content ?? prompt.user;
@@ -70,10 +74,10 @@ export async function answerWithRag(
     if (!answer || /^(?:i\s+(?:don't|do not)\s+know(?:\s+that)?|(?:there\s+is\s+)?no\s+information(?:\s+available)?|(?:this\s+is\s+)?not\s+in\s+the\s+(?:retrieved\s+)?records|not\s+in\s+the\s+knowledge\s+base)[.!]?$/i.test(answer)) {
       return { text: "I don't know that from your notes and documents." };
     }
-    if (introducedNetworkFacts(built.context, answer).length > 0) {
+    if (introducedNetworkFacts(grounded, answer).length > 0) {
       return { text: "I don't know that from your notes and documents." };
     }
-    return { text: withSources(answer, built.sourcesLine) };
+    return { text: withSources(answer, sourcesLine) };
   } catch (error) {
     deps.logger.warn(
       { event: "rag_answer_failed", message: redactString(error instanceof Error ? error.message : "rag failed") },
@@ -85,6 +89,12 @@ export async function answerWithRag(
 }
 
 export const answerFromKnowledge = answerWithRag;
+
+function memorySources(numbers: number[]): string {
+  if (numbers.length === 0) return "";
+  if (numbers.length === 1) return `From memory #${numbers[0]}`;
+  return `From memory #${numbers.slice(0, -1).join(", #")} and memory #${numbers[numbers.length - 1]}`;
+}
 
 function withSources(answer: string, sourcesLine: string): string {
   if (!sourcesLine) return answer;

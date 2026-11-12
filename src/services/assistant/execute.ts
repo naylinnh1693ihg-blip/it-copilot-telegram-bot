@@ -19,6 +19,7 @@ import { focusDelimitedFact } from "../rag/context.js";
 import { indexSavedText } from "../rag/index.js";
 import { attachNoteLinks, formatNoteLinks } from "../notes/links.js";
 import { draftDailySummary, draftIncidentReport, draftShiftHandover } from "./reports.js";
+import { MemoryService, formatMemoryList } from "../memory/service.js";
 
 export interface Reply {
   text: string;
@@ -418,6 +419,12 @@ export async function execute(
       }
       const category = intent.category ? matchCategory(intent.category) : matchCategory(content);
       const warning = disruptiveWarning(content);
+      if (intent.intent === "save_note" && intent.tags === "memory") {
+        const saved = await new MemoryService(deps).storeMemory(user.id, content);
+        if ("error" in saved) return { text: saved.error };
+        const shortened = saved.truncated ? " I kept the first 2000 characters." : "";
+        return { text: `Saved memory ${saved.memory.memoryNumber} (${saved.memory.memoryType}): ${snippet(saved.memory.content)}${shortened}` };
+      }
       if (intent.intent === "save_note") {
         const note = await deps.db.insertNote({
           userId: user.id,
@@ -478,6 +485,10 @@ export async function execute(
     }
     case "search_notes":
     case "search_knowledge": {
+      if (intent.intent === "search_notes" && intent.tags === "memories") {
+        const memories = await new MemoryService(deps).retrieveMemories(user.id, 10);
+        return { text: formatMemoryList(memories) };
+      }
       const query = cleanText(intent.search_query, 200);
       if (!query) return { text: "What should I search for?" };
       const notes = exactSingleTermMatches(await deps.db.searchNotes(user.id, query), query, (note) => `${note.title}\n${note.content}`);
@@ -525,6 +536,7 @@ export async function execute(
       return { text: `Updated note ${saved.noteNumber}. I kept the older text and added your new paragraph.${formatNoteLinks(links)}` };
     }
     case "delete_note": {
+      if (intent.tags === "memory") return forgetMemory(deps, user, intent, options.confirmed);
       const note = await deps.db.findNote(user.id, intent.entity_number);
       if (!note || note.deletedAt) return { text: `I don't have note ${intent.entity_number}.` };
       if (!options.confirmed) {
@@ -608,6 +620,29 @@ export async function execute(
     default:
       return { text: "I can't do that action." };
   }
+}
+
+async function forgetMemory(deps: Deps, user: User, intent: Intent, confirmed: boolean): Promise<Reply> {
+  const service = new MemoryService(deps);
+  let memory = intent.entity_number ? await deps.db.findMemory(user.id, intent.entity_number) : null;
+  if (!memory && intent.search_query) {
+    const matches = await service.searchMemories(user.id, intent.search_query, 5);
+    if (matches.length > 1) {
+      return { text: `I found more than one memory. Tell me the number:\n${matches.map((item) => `${item.memoryNumber}. ${snippet(item.content, 80)}`).join("\n")}` };
+    }
+    memory = matches[0] ?? null;
+  }
+  if (!memory) return { text: intent.entity_number ? `I don't have memory ${intent.entity_number}.` : `I don't have a memory about "${intent.search_query}".` };
+  if (!confirmed) {
+    return {
+      text: `Forget memory ${memory.memoryNumber}: ${snippet(memory.content, 120)}?\nReply YES to forget it, or NO to keep it.`,
+      keyboard: "confirm",
+      confirmation: { ...intent, entity_number: memory.memoryNumber, tags: "memory" },
+    };
+  }
+  const expired = await service.expireMemory(user.id, memory.memoryNumber);
+  if (!expired) return { text: `I don't have memory ${memory.memoryNumber}.` };
+  return { text: `Forgot memory ${memory.memoryNumber}.` };
 }
 
 function formatSearchResult(label: string, number: number, content: string, query: string): string {
