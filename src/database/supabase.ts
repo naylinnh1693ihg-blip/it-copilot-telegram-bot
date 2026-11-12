@@ -138,6 +138,12 @@ function memoryFrom(row: Row): Memory {
   };
 }
 
+/** Quote the timestamp. PostgREST splits filters on ".", and an unquoted millisecond dot drops the expiry check. A pin stays visible after its date. */
+export function memoryVisibleFilter(nowIso: string): string {
+  const stamp = nowIso.replace(/"/g, "");
+  return `pinned.eq.true,expires_at.is.null,expires_at.gt."${stamp}"`;
+}
+
 function memoryType(value: string): MemoryType {
   if (value === "preference" || value === "fact" || value === "context" || value === "equipment" || value === "goal") return value;
   return "fact";
@@ -922,7 +928,10 @@ export class SupabaseDatabase implements Database {
   }
 
   async listMemories(userId: string, options: MemoryQuery): Promise<Memory[]> {
-    const { data, error } = await this.memorySelect(userId, options).order("memory_number", { ascending: false }).limit(options.limit);
+    const { data, error } = await this.memorySelect(userId, options)
+      .order("pinned", { ascending: false })
+      .order("memory_number", { ascending: false })
+      .limit(options.limit);
     this.raise(error);
     return rows(data).map(memoryFrom);
   }
@@ -930,7 +939,11 @@ export class SupabaseDatabase implements Database {
   async searchMemories(userId: string, query: string, options: MemoryQuery): Promise<Memory[]> {
     const needle = query.replace(/[%_]/g, "").trim();
     if (!needle) return this.listMemories(userId, options);
-    const { data, error } = await this.memorySelect(userId, options).ilike("content", `%${needle}%`).order("memory_number", { ascending: false }).limit(options.limit);
+    const { data, error } = await this.memorySelect(userId, options)
+      .ilike("content", `%${needle}%`)
+      .order("pinned", { ascending: false })
+      .order("memory_number", { ascending: false })
+      .limit(options.limit);
     this.raise(error);
     return rows(data).map(memoryFrom);
   }
@@ -941,6 +954,7 @@ export class SupabaseDatabase implements Database {
       .update({ deleted_at: nowIso, updated_at: nowIso })
       .eq("user_id", userId)
       .is("deleted_at", null)
+      .eq("pinned", false)
       .not("expires_at", "is", null)
       .lte("expires_at", nowIso)
       .select("id");
@@ -951,7 +965,7 @@ export class SupabaseDatabase implements Database {
   private memorySelect(userId: string, options: MemoryQuery) {
     let query = this.client.from("memories").select("*").eq("user_id", userId).is("deleted_at", null);
     if (options.memoryType) query = query.eq("memory_type", options.memoryType);
-    if (!options.includeExpired) query = query.or(`expires_at.is.null,expires_at.gt.${options.nowIso}`);
+    if (!options.includeExpired) query = query.or(memoryVisibleFilter(options.nowIso));
     return query;
   }
 

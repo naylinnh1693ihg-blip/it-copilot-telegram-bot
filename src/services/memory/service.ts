@@ -40,7 +40,7 @@ export class MemoryService {
       pinned: options?.pinned ?? false,
       sourceType: options?.sourceType ?? "chat",
       sourceId: options?.sourceId ?? null,
-      confidence: options?.confidence ?? 1,
+      confidence: clampConfidence(options?.confidence ?? 1),
       createdAt: now,
       expiresAt: options?.expiresAt ?? null,
     });
@@ -117,8 +117,11 @@ export class MemoryService {
         const score = terms.reduce((total, term) => total + (haystack.includes(term) ? 1 : 0), 0);
         return { memory, score };
       })
-      .filter((item) => terms.length === 0 || item.score > 0)
-      .sort((left, right) => right.score - left.score || right.memory.memoryNumber - left.memory.memoryNumber)
+      .filter((item) => item.memory.pinned || terms.length === 0 || item.score > 0)
+      .sort((left, right) => {
+        if (left.memory.pinned !== right.memory.pinned) return left.memory.pinned ? -1 : 1;
+        return right.score - left.score || (right.memory.confidence ?? 0) - (left.memory.confidence ?? 0) || right.memory.memoryNumber - left.memory.memoryNumber;
+      })
       .slice(0, 8);
     if (ranked.length === 0) return { text: "", numbers: [] };
     this.deps.logger.info({ event: "memory_retrieved", count: ranked.length }, "memories retrieved");
@@ -128,6 +131,11 @@ export class MemoryService {
 }
 
 const MEMORY_QUERY_FILLER = new Set(["the", "what", "whats", "how", "did", "does", "for", "about", "that", "this", "with"]);
+
+function clampConfidence(value: number | null): number | null {
+  if (value == null || Number.isNaN(value)) return null;
+  return Math.min(1, Math.max(0, value));
+}
 
 export function inferMemoryType(content: string): MemoryType {
   if (/\bprefer(?:s|red|ence)?\b/i.test(content)) return "preference";

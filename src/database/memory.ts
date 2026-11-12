@@ -35,6 +35,11 @@ function copy<T>(value: T): T {
   return structuredClone(value);
 }
 
+function byPinThenNumber(left: Memory, right: Memory): number {
+  if (left.pinned !== right.pinned) return left.pinned ? -1 : 1;
+  return right.memoryNumber - left.memoryNumber;
+}
+
 function matches(query: string, parts: Array<string | null | undefined>): boolean {
   const tokens = query.toLowerCase().split(/\s+/).filter((token) => token.length > 1);
   if (tokens.length === 0) return false;
@@ -485,7 +490,7 @@ export class MemoryDatabase implements Database {
   async listMemories(userId: string, options: MemoryQuery): Promise<Memory[]> {
     return this.memories
       .filter((memory) => this.memoryVisible(memory, userId, options))
-      .sort((left, right) => right.memoryNumber - left.memoryNumber)
+      .sort(byPinThenNumber)
       .slice(0, options.limit)
       .map((memory) => copy(memory));
   }
@@ -498,7 +503,7 @@ export class MemoryDatabase implements Database {
         const haystack = memory.content.toLowerCase();
         return terms.length === 0 || terms.every((term) => haystack.includes(term));
       })
-      .sort((left, right) => right.memoryNumber - left.memoryNumber)
+      .sort(byPinThenNumber)
       .slice(0, options.limit)
       .map((memory) => copy(memory));
   }
@@ -507,7 +512,7 @@ export class MemoryDatabase implements Database {
     const now = Date.parse(nowIso);
     let count = 0;
     for (const memory of this.memories) {
-      if (memory.userId !== userId || memory.deletedAt || !memory.expiresAt) continue;
+      if (memory.userId !== userId || memory.deletedAt || memory.pinned || !memory.expiresAt) continue;
       if (Date.parse(memory.expiresAt) > now) continue;
       memory.deletedAt = nowIso;
       memory.updatedAt = nowIso;
@@ -519,7 +524,7 @@ export class MemoryDatabase implements Database {
   private memoryVisible(memory: Memory, userId: string, options: MemoryQuery): boolean {
     if (memory.userId !== userId || memory.deletedAt) return false;
     if (options.memoryType && memory.memoryType !== options.memoryType) return false;
-    if (options.includeExpired) return true;
+    if (options.includeExpired || memory.pinned) return true;
     return !memory.expiresAt || Date.parse(memory.expiresAt) > Date.parse(options.nowIso);
   }
 

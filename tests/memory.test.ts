@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { handleText } from "../src/services/assistant/handleText.js";
+import { memoryVisibleFilter } from "../src/database/supabase.js";
 import { MemoryService } from "../src/services/memory/service.js";
 import { answerWithRag } from "../src/services/rag/retrieve.js";
 import type { LlmClient } from "../src/services/grok/client.js";
@@ -77,5 +78,23 @@ describe("memories", () => {
     if ("error" in goal) throw new Error(goal.error);
     const stored = await db.findMemory(user.id, goal.memory.memoryNumber);
     expect(stored).toMatchObject({ memoryType: "goal", sourceType: "admin", pinned: true });
+  });
+
+  it("keeps a pinned memory in an unrelated answer and does not expire it automatically", async () => {
+    const { deps, db } = testDeps();
+    const user = await owner(db);
+    const service = new MemoryService(deps);
+    const pinned = await service.storeMemory(user.id, "I prefer brief answers", { pinned: true, expiresAt: "2026-10-01T00:00:00.000Z" });
+    if ("error" in pinned) throw new Error(pinned.error);
+    await service.storeMemory(user.id, "The guest VLAN is 20", { expiresAt: "2026-10-01T00:00:00.000Z" });
+    expect(await service.cleanup(user.id)).toBe(1);
+    const block = await service.promptBlock(user.id, "Where is the printer?");
+    expect(block.text).toContain("prefer brief answers");
+    expect(block.text).not.toContain("guest VLAN");
+  });
+
+  it("quotes memory expiry timestamps so the millisecond dot stays in the filter", () => {
+    const filter = memoryVisibleFilter("2026-10-30T06:00:00.000Z");
+    expect(filter).toBe('pinned.eq.true,expires_at.is.null,expires_at.gt."2026-10-30T06:00:00.000Z"');
   });
 });

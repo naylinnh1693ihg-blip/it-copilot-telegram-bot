@@ -64,22 +64,34 @@ export function readCookie(header: string | undefined, name: string): string | u
   return undefined;
 }
 
-function secureCookies(deps: Deps): boolean {
-  return deps.env.NODE_ENV === "production" || adminBaseUrl(deps).startsWith("https://");
+function secureCookies(req: Request, deps: Deps): boolean {
+  if (req.secure) return true;
+  const host = (req.header("host") ?? "").replace(/:\d+$/, "");
+  if (host === "localhost" || host === "127.0.0.1" || host === "[::1]") return false;
+  return adminBaseUrl(deps).startsWith("https://");
 }
 
-function setSessionCookie(deps: Deps, res: Response, sessionId: string): void {
+function setSessionCookie(req: Request, deps: Deps, res: Response, sessionId: string): void {
   res.cookie(SESSION_COOKIE, sessionId, {
     httpOnly: true,
-    secure: secureCookies(deps),
+    secure: secureCookies(req, deps),
     sameSite: "lax",
     path: COOKIE_PATH,
     maxAge: SESSION_DAYS * 24 * 60 * 60 * 1000,
   });
 }
 
-function clearSessionCookie(deps: Deps, res: Response): void {
-  res.clearCookie(SESSION_COOKIE, { httpOnly: true, secure: secureCookies(deps), sameSite: "lax", path: COOKIE_PATH });
+function clearSessionCookie(req: Request, deps: Deps, res: Response): void {
+  res.clearCookie(SESSION_COOKIE, { httpOnly: true, secure: secureCookies(req, deps), sameSite: "lax", path: COOKIE_PATH });
+}
+
+/** The browser's own host, plus the configured public origin. A dev proxy can present localhost while PUBLIC_BASE_URL is the deployed site. */
+function originAllowed(req: Request, deps: Deps): boolean {
+  const origin = req.header("origin");
+  if (!origin) return true;
+  const host = req.header("host");
+  const self = host ? `${req.protocol}://${host}` : "";
+  return origin === self || origin === new URL(adminBaseUrl(deps)).origin;
 }
 
 /** Local state set by requireAdminSession. Routes read the user from here, never from the request. */
@@ -114,8 +126,6 @@ export function createAdminRouter(deps: Deps, options: AdminRouterOptions = {}):
   const loginLimiter = createRateLimiter(10, 15 * 60_000);
   const readLimiter = createRateLimiter(300, 60_000);
   const writeLimiter = createRateLimiter(60, 60_000);
-  const expectedOrigin = new URL(adminBaseUrl(deps)).origin;
-
   router.use(securityHeaders);
 
   const api = express.Router();
@@ -127,8 +137,7 @@ export function createAdminRouter(deps: Deps, options: AdminRouterOptions = {}):
     }
     if (req.method !== "GET" && req.method !== "HEAD") {
       // Browsers always send Origin on cross-site POSTs. A mismatch is a forged request.
-      const origin = req.header("origin");
-      if (origin && origin !== expectedOrigin) {
+      if (!originAllowed(req, deps)) {
         res.status(403).json({ error: "This request came from another site." });
         return;
       }
@@ -157,7 +166,7 @@ export function createAdminRouter(deps: Deps, options: AdminRouterOptions = {}):
         res.status(401).json({ error: "That sign-in link has expired or was already used. Send /admin to the bot for a new one." });
         return;
       }
-      setSessionCookie(deps, res, created.sessionId);
+      setSessionCookie(req, deps, res, created.sessionId);
       res.status(200).json({ user: publicUser(created.user), csrfToken: created.csrfToken });
     }),
   );
@@ -167,7 +176,7 @@ export function createAdminRouter(deps: Deps, options: AdminRouterOptions = {}):
     authenticate(deps, sessionId)
       .then((active) => {
         if (!active || !sessionId) {
-          clearSessionCookie(deps, res);
+          clearSessionCookie(req, deps, res);
           res.status(401).json({ error: "Sign in again. Send /admin to the bot for a link." });
           return;
         }
@@ -184,7 +193,7 @@ export function createAdminRouter(deps: Deps, options: AdminRouterOptions = {}):
           }
         }
         // Refresh the cookie lifetime alongside the server-side sliding expiry.
-        setSessionCookie(deps, res, sessionId);
+        setSessionCookie(req, deps, res, sessionId);
         next();
       })
       .catch((error: unknown) => {
@@ -205,9 +214,9 @@ export function createAdminRouter(deps: Deps, options: AdminRouterOptions = {}):
 
   api.post(
     "/auth/logout",
-    handle(deps, async (_req, res) => {
+    handle(deps, async (req, res) => {
       await logout(deps, activeSession(res));
-      clearSessionCookie(deps, res);
+      clearSessionCookie(req, deps, res);
       res.json({ ok: true });
     }),
   );

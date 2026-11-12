@@ -84,7 +84,7 @@ describe("magic link sign-in", () => {
 
     const app = createHttpApp(deps);
     const token = tokenFrom(link.url);
-    const first = await request(app).post("/admin/api/auth/magic").send({ token });
+    const first = await request(app).post("/admin/api/auth/magic").set("Host", "copilot.test").send({ token });
     expect(first.status).toBe(200);
     expect(first.body.user).toEqual({ displayName: "Nay", role: "owner" });
     const cookie = first.headers["set-cookie"]?.[0] ?? "";
@@ -206,6 +206,14 @@ describe("admin sessions", () => {
       .set("Origin", "https://evil.example")
       .send({});
     expect(foreign.status).toBe(403);
+    const local = await request(app)
+      .post("/admin/api/auth/logout")
+      .set("Cookie", cookie)
+      .set("X-CSRF-Token", csrfToken)
+      .set("Host", "127.0.0.1:3000")
+      .set("Origin", "http://127.0.0.1:3000")
+      .send({});
+    expect(local.status).toBe(200);
     const form = await request(app)
       .post("/admin/api/auth/logout")
       .set("Cookie", cookie)
