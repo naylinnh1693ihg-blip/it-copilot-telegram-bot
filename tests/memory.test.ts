@@ -60,4 +60,22 @@ describe("memories", () => {
     expect(reply?.text).toContain("Floor 2");
     expect(reply?.text).toContain("From memory #1");
   });
+
+  it("records the source, confidence, and pin state of a memory", async () => {
+    const { deps, db } = testDeps();
+    const user = await owner(db);
+    const service = new MemoryService(deps);
+    const fromChat = await service.storeMemory(user.id, "I prefer brief answers");
+    if ("error" in fromChat) throw new Error(fromChat.error);
+    expect(fromChat.memory).toMatchObject({ sourceType: "chat", sourceId: null, confidence: 1, pinned: false });
+
+    const goal = await service.storeMemory(user.id, "Finish the switch migration by December", {
+      memoryType: "goal",
+      sourceType: "admin",
+      pinned: true,
+    });
+    if ("error" in goal) throw new Error(goal.error);
+    const stored = await db.findMemory(user.id, goal.memory.memoryNumber);
+    expect(stored).toMatchObject({ memoryType: "goal", sourceType: "admin", pinned: true });
+  });
 });

@@ -150,7 +150,12 @@ export interface ConversationTurn {
   createdAt: string;
 }
 
-export type MemoryType = "preference" | "fact" | "context" | "equipment";
+export type MemoryType = "preference" | "fact" | "context" | "equipment" | "goal";
+
+export const MEMORY_TYPES: readonly MemoryType[] = ["preference", "fact", "context", "equipment", "goal"];
+
+/** Where a memory came from. chat: an explicit "Remember that" message. admin: typed in the admin app. */
+export type MemorySourceType = "chat" | "note" | "document" | "admin";
 
 export interface Memory {
   id: string;
@@ -160,6 +165,11 @@ export interface Memory {
   memoryType: MemoryType;
   importance: number | null;
   metadata: Record<string, string | number | boolean | null>;
+  pinned: boolean;
+  sourceType: MemorySourceType | null;
+  sourceId: string | null;
+  /** 0 to 1. An explicit user statement is 1. */
+  confidence: number | null;
   createdAt: string;
   updatedAt: string;
   expiresAt: string | null;

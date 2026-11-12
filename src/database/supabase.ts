@@ -6,6 +6,7 @@ import type {
   Equipment,
   EquipmentKind,
   Memory,
+  MemorySourceType,
   MemoryType,
   Extraction,
   KnowledgeEntry,
@@ -123,6 +124,10 @@ function memoryFrom(row: Row): Memory {
     memoryType: memoryType(kind),
     importance: typeof importance === "number" ? importance : null,
     metadata: metadataFrom(row.metadata),
+    pinned: row.pinned === true,
+    sourceType: memorySourceType(textOrNull(row, "source_type")),
+    sourceId: textOrNull(row, "source_id"),
+    confidence: typeof row.confidence === "number" ? row.confidence : null,
     createdAt: text(row, "created_at"),
     updatedAt: text(row, "updated_at"),
     expiresAt: textOrNull(row, "expires_at"),
@@ -131,8 +136,13 @@ function memoryFrom(row: Row): Memory {
 }
 
 function memoryType(value: string): MemoryType {
-  if (value === "preference" || value === "fact" || value === "context" || value === "equipment") return value;
+  if (value === "preference" || value === "fact" || value === "context" || value === "equipment" || value === "goal") return value;
   return "fact";
+}
+
+function memorySourceType(value: string | null): MemorySourceType | null {
+  if (value === "chat" || value === "note" || value === "document" || value === "admin") return value;
+  return null;
 }
 
 function metadataFrom(value: unknown): Record<string, string | number | boolean | null> {
@@ -821,6 +831,10 @@ export class SupabaseDatabase implements Database {
         memory_type: input.memoryType,
         importance: input.importance,
         metadata: input.metadata,
+        pinned: input.pinned,
+        source_type: input.sourceType,
+        source_id: input.sourceId,
+        confidence: input.confidence,
         created_at: input.createdAt,
         updated_at: input.createdAt,
         expires_at: input.expiresAt,
@@ -840,6 +854,10 @@ export class SupabaseDatabase implements Database {
         memory_type: memory.memoryType,
         importance: memory.importance,
         metadata: memory.metadata,
+        pinned: memory.pinned,
+        source_type: memory.sourceType,
+        source_id: memory.sourceId,
+        confidence: memory.confidence,
         expires_at: memory.expiresAt,
         deleted_at: memory.deletedAt,
         updated_at: memory.updatedAt,

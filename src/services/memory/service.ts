@@ -1,6 +1,6 @@
 import type { Deps } from "../../app/deps.js";
 import type { MemoryQuery } from "../../database/types.js";
-import type { Memory, MemoryType } from "../../types/models.js";
+import type { Memory, MemorySourceType, MemoryType } from "../../types/models.js";
 import { cleanText, secretRisk } from "../../utils/text.js";
 import { toIso } from "../../utils/time.js";
 
@@ -13,7 +13,16 @@ export class MemoryService {
   async storeMemory(
     userId: string,
     content: string,
-    options?: { memoryType?: MemoryType; expiresAt?: string | null; metadata?: Record<string, string | number | boolean | null>; importance?: number | null },
+    options?: {
+      memoryType?: MemoryType;
+      expiresAt?: string | null;
+      metadata?: Record<string, string | number | boolean | null>;
+      importance?: number | null;
+      pinned?: boolean;
+      sourceType?: MemorySourceType | null;
+      sourceId?: string | null;
+      confidence?: number | null;
+    },
   ): Promise<{ memory: Memory; truncated: boolean } | { error: string }> {
     const cleaned = cleanText(content, MEMORY_CONTENT_LIMIT + 1);
     const risk = secretRisk(cleaned);
@@ -28,6 +37,10 @@ export class MemoryService {
       memoryType: options?.memoryType ?? inferMemoryType(body),
       importance: options?.importance ?? null,
       metadata: { ...(options?.metadata ?? {}), ...(truncated ? { truncated: true } : {}) },
+      pinned: options?.pinned ?? false,
+      sourceType: options?.sourceType ?? "chat",
+      sourceId: options?.sourceId ?? null,
+      confidence: options?.confidence ?? 1,
       createdAt: now,
       expiresAt: options?.expiresAt ?? null,
     });

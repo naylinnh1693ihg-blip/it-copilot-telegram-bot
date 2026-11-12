@@ -5,6 +5,7 @@ import type {
   DocumentRecord,
   Equipment,
   Memory,
+  MemorySourceType,
   MemoryType,
   Extraction,
   KnowledgeEntry,
@@ -84,6 +85,10 @@ export interface NewMemory {
   memoryType: MemoryType;
   importance: number | null;
   metadata: Record<string, string | number | boolean | null>;
+  pinned: boolean;
+  sourceType: MemorySourceType | null;
+  sourceId: string | null;
+  confidence: number | null;
   createdAt: string;
   expiresAt: string | null;
 }
