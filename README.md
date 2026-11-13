@@ -26,7 +26,7 @@ node -v
 npm -v
 ```
 
-You need Node.js 20 or newer. This project was written on Node.js 26.
+You need Node.js 22 or newer (the PDF library `unpdf` requires it). Render is pinned to Node 22 through `NODE_VERSION` in `render.yaml`. This project was written on Node.js 26.
 
 ## 2. Open the project in Cursor
 

@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Personal IT work copilot for Telegram, backed by Grok and Supabase.",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
