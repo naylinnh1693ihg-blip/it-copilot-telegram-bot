@@ -750,6 +750,37 @@ export class SupabaseDatabase implements Database {
     return knowledgeFrom(data);
   }
 
+  async updateKnowledge(entry: KnowledgeEntry): Promise<KnowledgeEntry> {
+    const { data, error } = await this.client
+      .from("knowledge_entries")
+      .update({
+        title: entry.title,
+        content: entry.content,
+        category: entry.category,
+        tags: entry.tags,
+        deleted_at: entry.deletedAt,
+        updated_at: entry.updatedAt,
+      })
+      .eq("id", entry.id)
+      .eq("user_id", entry.userId)
+      .select("*")
+      .single();
+    this.raise(error);
+    if (!isRow(data)) throw new DatabaseError("Knowledge update returned no row.");
+    return knowledgeFrom(data);
+  }
+
+  async findKnowledge(userId: string, entryNumber: number): Promise<KnowledgeEntry | null> {
+    const { data, error } = await this.client
+      .from("knowledge_entries")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("entry_number", entryNumber)
+      .maybeSingle();
+    this.raise(error);
+    return isRow(data) && !textOrNull(data, "deleted_at") ? knowledgeFrom(data) : null;
+  }
+
   async listKnowledge(userId: string): Promise<KnowledgeEntry[]> {
     const { data, error } = await this.client.from("knowledge_entries").select("*").eq("user_id", userId).is("deleted_at", null).order("entry_number");
     this.raise(error);
@@ -1317,6 +1348,26 @@ export class SupabaseDatabase implements Database {
       model: text(row, "model"),
       inputTokens: integer(row, "input_tokens"),
       outputTokens: integer(row, "output_tokens"),
+    }));
+  }
+
+  async listUsageEvents(userId: string, fromInclusive: string, untilExclusive: string): Promise<import("./types.js").UsageEventRow[]> {
+    const { data, error } = await this.client
+      .from("ai_usage")
+      .select("model, purpose, input_tokens, output_tokens, estimated_usd, created_at")
+      .eq("user_id", userId)
+      .gte("created_at", fromInclusive)
+      .lt("created_at", untilExclusive)
+      .order("created_at", { ascending: false })
+      .limit(100);
+    this.raise(error);
+    return rows(data).map((row) => ({
+      model: text(row, "model"),
+      purpose: text(row, "purpose"),
+      inputTokens: integer(row, "input_tokens"),
+      outputTokens: integer(row, "output_tokens"),
+      estimatedUsd: real(row, "estimated_usd"),
+      createdAt: text(row, "created_at"),
     }));
   }
 }

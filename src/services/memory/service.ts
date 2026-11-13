@@ -68,17 +68,29 @@ export class MemoryService {
   async updateMemory(
     userId: string,
     memoryNumber: number,
-    patch: { content?: string; expiresAt?: string | null; metadata?: Record<string, string | number | boolean | null> },
-  ): Promise<Memory | null> {
+    patch: {
+      content?: string;
+      expiresAt?: string | null;
+      metadata?: Record<string, string | number | boolean | null>;
+      pinned?: boolean;
+      memoryType?: MemoryType;
+    },
+  ): Promise<Memory | { error: string } | null> {
     const current = await this.deps.db.findMemory(userId, memoryNumber);
-    if (!current) return null;
+    if (!current || current.deletedAt) return null;
     const content = patch.content === undefined ? current.content : cleanText(patch.content, MEMORY_CONTENT_LIMIT);
-    if (!content) return null;
+    if (!content) return { error: "Memory content can't be empty." };
     const risk = secretRisk(content);
-    if (risk) return null;
+    if (risk) {
+      return {
+        error: `I didn't save that. It looks like a ${risk}. Keep passwords, keys, and tokens in a password manager, not in this copilot.`,
+      };
+    }
     const updated = await this.deps.db.updateMemory({
       ...current,
       content,
+      pinned: patch.pinned === undefined ? current.pinned : patch.pinned,
+      memoryType: patch.memoryType ?? current.memoryType,
       expiresAt: patch.expiresAt === undefined ? current.expiresAt : patch.expiresAt,
       metadata: patch.metadata ? { ...current.metadata, ...patch.metadata } : current.metadata,
       updatedAt: toIso(this.deps.clock.now()),

@@ -161,6 +161,15 @@ export interface UsageSlice {
   outputTokens: number;
 }
 
+export interface UsageEventRow {
+  model: string;
+  purpose: string;
+  inputTokens: number;
+  outputTokens: number;
+  estimatedUsd: number;
+  createdAt: string;
+}
+
 export interface SavedTextHit {
   source: "note" | "knowledge" | "document";
   sourceNumber: number;
@@ -235,6 +244,8 @@ export interface Database {
   /** Inserts the pair. Returns false when that pair is already stored. */
   linkNoteDocument(noteId: string, documentId: string): Promise<boolean>;
   insertKnowledge(input: NewKnowledge): Promise<KnowledgeEntry>;
+  updateKnowledge(entry: KnowledgeEntry): Promise<KnowledgeEntry>;
+  findKnowledge(userId: string, entryNumber: number): Promise<KnowledgeEntry | null>;
   listKnowledge(userId: string): Promise<KnowledgeEntry[]>;
   searchKnowledge(userId: string, query: string): Promise<KnowledgeEntry[]>;
   insertDocument(input: NewDocument): Promise<DocumentRecord>;
@@ -276,6 +287,7 @@ export interface Database {
   recordUsage(entry: Omit<UsageEntry, "id">): Promise<void>;
   /** Usage in [fromInclusive, untilExclusive). One entry per stored request. */
   listUsage(userId: string, fromInclusive: string, untilExclusive: string): Promise<UsageSlice[]>;
+  listUsageEvents(userId: string, fromInclusive: string, untilExclusive: string): Promise<UsageEventRow[]>;
   replaceChunks(userId: string, source: ChunkSource, sourceId: string, chunks: StoredChunk[]): Promise<void>;
   listChunks(userId: string, source: ChunkSource, sourceId: string): Promise<StoredChunk[]>;
   searchChunks(userId: string, query: string, embedding: number[] | null, embeddingModel: string | null, limit: number): Promise<ChunkHit[]>;

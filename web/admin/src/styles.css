@@ -123,6 +123,107 @@ code {
   font-size: 0.9rem;
 }
 
+.stat-value {
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.stat-value.small {
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.field {
+  flex: 1;
+  min-width: 140px;
+  font: inherit;
+  padding: 10px 12px;
+  min-height: 44px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.field.area {
+  min-height: 120px;
+  resize: vertical;
+  width: 100%;
+}
+
+.field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.entity-list li {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.excerpt {
+  margin: 0;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
+.pin-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.9rem;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+.data-table th,
+.data-table td {
+  text-align: left;
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.data-table th {
+  color: var(--muted);
+  font-weight: 600;
+}
+
 .list {
   list-style: none;
   margin: 0;

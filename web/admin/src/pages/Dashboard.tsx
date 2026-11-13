@@ -1,10 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
-import { api, type ActivityResponse } from "../api";
+import { api, type ActivityResponse, type OverviewResponse } from "../api";
 
 const ACTION_LABELS: Record<string, string> = {
   admin_login: "Signed in to the admin app",
   admin_logout: "Signed out of the admin app",
   admin_link_issued: "Sign-in link sent by the bot",
+  "knowledge.create": "Knowledge entry created",
+  "knowledge.update": "Knowledge entry updated",
+  "knowledge.delete": "Knowledge entry deleted",
+  "memory.create": "Memory created",
+  "memory.update": "Memory updated",
+  "memory.delete": "Memory deleted",
 };
 
 function label(action: string): string {
@@ -13,21 +19,22 @@ function label(action: string): string {
 
 export function Dashboard() {
   const activity = useQuery({ queryKey: ["activity"], queryFn: () => api<ActivityResponse>("/activity") });
+  const overview = useQuery({ queryKey: ["overview"], queryFn: () => api<OverviewResponse>("/overview") });
   return (
     <section>
       <h1>Home</h1>
       <div className="stat-grid">
         <div className="card stat">
           <span className="stat-label">Cost this month</span>
-          <span className="stat-pending">Added in the Usage phase</span>
+          <span className="stat-value">{overview.isPending ? "…" : overview.data?.monthCostLabel ?? "—"}</span>
         </div>
         <div className="card stat">
-          <span className="stat-label">Items stored</span>
-          <span className="stat-pending">Added in the Knowledge phase</span>
+          <span className="stat-label">Knowledge entries</span>
+          <span className="stat-value">{overview.isPending ? "…" : (overview.data?.knowledgeCount ?? "—")}</span>
         </div>
         <div className="card stat">
           <span className="stat-label">Memories</span>
-          <span className="stat-pending">Added in the Memory phase</span>
+          <span className="stat-value">{overview.isPending ? "…" : (overview.data?.memoryCount ?? "—")}</span>
         </div>
       </div>
 

@@ -15,6 +15,7 @@ import {
 } from "../../services/admin/auth.js";
 import { createRateLimiter } from "../../utils/security.js";
 import { redactString } from "../../utils/text.js";
+import { registerAdminResourceRoutes } from "./resources.js";
 
 export const SESSION_COOKIE = "admin_session";
 const COOKIE_PATH = "/admin";
@@ -141,7 +142,8 @@ export function createAdminRouter(deps: Deps, options: AdminRouterOptions = {}):
         res.status(403).json({ error: "This request came from another site." });
         return;
       }
-      if (!req.is("application/json")) {
+      const contentType = req.header("content-type") ?? "";
+      if (contentType && !contentType.includes("application/json")) {
         res.status(415).json({ error: "Send JSON." });
         return;
       }
@@ -231,6 +233,8 @@ export function createAdminRouter(deps: Deps, options: AdminRouterOptions = {}):
       });
     }),
   );
+
+  registerAdminResourceRoutes(api, deps, (run) => handle(deps, run));
 
   api.use((_req, res) => {
     res.status(404).json({ error: "Not found." });

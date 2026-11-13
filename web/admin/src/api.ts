@@ -15,7 +15,9 @@ export function setCsrfToken(token: string): void {
   csrfToken = token;
 }
 
-export async function api<T>(path: string, init: { method?: "GET" | "POST" | "PATCH" | "DELETE"; body?: unknown } = {}): Promise<T> {
+export type HttpMethod = "GET" | "POST" | "PATCH" | "DELETE";
+
+export async function api<T>(path: string, init: { method?: HttpMethod; body?: unknown } = {}): Promise<T> {
   const method = init.method ?? "GET";
   const headers: Record<string, string> = { Accept: "application/json" };
   if (method !== "GET") {
@@ -57,4 +59,44 @@ export interface SessionResponse {
 
 export interface ActivityResponse {
   entries: Array<{ action: string; entity: string; createdAt: string }>;
+}
+
+export interface OverviewResponse {
+  knowledgeCount: number;
+  memoryCount: number;
+  monthCostUsd: number | null;
+  monthCostLabel: string;
+}
+
+export interface KnowledgeEntry {
+  entryNumber: number;
+  title: string;
+  content: string;
+  category: string;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const MEMORY_TYPES = ["preference", "fact", "context", "equipment", "goal"] as const;
+
+export interface AdminMemory {
+  memoryNumber: number;
+  content: string;
+  memoryType: (typeof MEMORY_TYPES)[number];
+  pinned: boolean;
+  sourceType: string | null;
+  confidence: number | null;
+  expiresAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UsageSummary {
+  range: "week" | "month";
+  from: string;
+  until: string;
+  totalUsd: number | null;
+  byModel: Array<{ model: string; inputTokens: number; outputTokens: number; costUsd: number | null }>;
+  events: Array<{ model: string; purpose: string; inputTokens: number; outputTokens: number; estimatedUsd: number; createdAt: string }>;
 }

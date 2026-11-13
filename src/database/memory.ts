@@ -375,6 +375,19 @@ export class MemoryDatabase implements Database {
     return copy(entry);
   }
 
+  async updateKnowledge(entry: KnowledgeEntry): Promise<KnowledgeEntry> {
+    const index = this.knowledge.findIndex((item) => item.id === entry.id);
+    if (index < 0) throw new Error("Knowledge not found");
+    this.knowledge[index] = copy(entry);
+    return copy(entry);
+  }
+
+  async findKnowledge(userId: string, entryNumber: number): Promise<KnowledgeEntry | null> {
+    return copy(
+      this.knowledge.find((entry) => entry.userId === userId && entry.entryNumber === entryNumber && !entry.deletedAt) ?? null,
+    );
+  }
+
   async listKnowledge(userId: string): Promise<KnowledgeEntry[]> {
     return this.knowledge.filter((entry) => entry.userId === userId && !entry.deletedAt).map((entry) => copy(entry));
   }
@@ -716,6 +729,23 @@ export class MemoryDatabase implements Database {
     return this.usage
       .filter((entry) => entry.userId === userId && Date.parse(entry.createdAt) >= from && Date.parse(entry.createdAt) < until)
       .map((entry) => ({ model: entry.model, inputTokens: entry.inputTokens, outputTokens: entry.outputTokens }));
+  }
+
+  async listUsageEvents(userId: string, fromInclusive: string, untilExclusive: string): Promise<import("./types.js").UsageEventRow[]> {
+    const from = Date.parse(fromInclusive);
+    const until = Date.parse(untilExclusive);
+    return this.usage
+      .filter((entry) => entry.userId === userId && Date.parse(entry.createdAt) >= from && Date.parse(entry.createdAt) < until)
+      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
+      .slice(0, 100)
+      .map((entry) => ({
+        model: entry.model,
+        purpose: entry.purpose,
+        inputTokens: entry.inputTokens,
+        outputTokens: entry.outputTokens,
+        estimatedUsd: entry.estimatedUsd,
+        createdAt: entry.createdAt,
+      }));
   }
 }
 
