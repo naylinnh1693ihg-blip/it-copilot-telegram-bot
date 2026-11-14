@@ -21,6 +21,7 @@
     "dev:admin": "vite --config web/admin/vite.config.ts"
   },
   "dependencies": {
+    "@grammyjs/auto-retry": "^2.0.2",
     "@napi-rs/canvas": "^0.1.80",
     "@supabase/supabase-js": "^2.49.8",
     "dotenv": "^16.6.1",
