@@ -4,8 +4,13 @@ coverage/
 .env
 .env.*
 !.env.example
+!.env.monitoring.example
 *.log
 .DS_Store
 supabase/.temp/
 .vercel/
 .idea/
+.env.monitoring
+.config/rclone/
+.local-backups/
+monitoring/data/
