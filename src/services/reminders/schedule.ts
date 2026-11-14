@@ -112,3 +112,36 @@ export function reminderDedupeKey(input: {
   const day = input.kind === "once" ? local : input.at.toFormat("HH:mm");
   return [input.kind, input.title.trim().toLowerCase(), day, input.weekday ?? ""].join("|").slice(0, 300);
 }
+
+/**
+ * The first scheduled occurrence strictly after `afterIso`, starting from `occurrenceIso`.
+ * Missed occurrences are skipped, so a recurring reminder never fires several times in a row
+ * to catch up. Returns `occurrenceIso` unchanged when it is already in the future, and null
+ * for one-time reminders or an invalid schedule.
+ */
+export function nextOccurrenceAfter(
+  kind: ReminderKind,
+  occurrenceIso: string,
+  zone: string,
+  intervalMinutes: number | null,
+  afterIso: string,
+): string | null {
+  if (kind === "once") return null;
+  const after = DateTime.fromISO(afterIso);
+  let occurrence = DateTime.fromISO(occurrenceIso).setZone(zone);
+  if (!after.isValid || !occurrence.isValid) return null;
+  if (occurrence > after) return toIso(occurrence);
+  if (kind === "interval") {
+    if (!intervalMinutes || intervalMinutes <= 0) return null;
+    const steps = Math.floor(after.diff(occurrence, "minutes").minutes / intervalMinutes) + 1;
+    occurrence = occurrence.plus({ minutes: steps * intervalMinutes });
+    while (occurrence <= after) occurrence = occurrence.plus({ minutes: intervalMinutes });
+    return toIso(occurrence);
+  }
+  // Step in local calendar units so the wall-clock time survives daylight-saving changes.
+  const unit = kind === "weekly" ? "weeks" : "days";
+  const skipped = Math.max(Math.floor(after.diff(occurrence, unit).as(unit)), 0);
+  occurrence = occurrence.plus({ [unit]: skipped });
+  while (occurrence <= after) occurrence = occurrence.plus({ [unit]: 1 });
+  return toIso(occurrence);
+}

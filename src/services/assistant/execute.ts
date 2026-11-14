@@ -20,13 +20,45 @@ import { indexSavedText } from "../rag/index.js";
 import { attachNoteLinks, formatNoteLinks } from "../notes/links.js";
 import { draftDailySummary, draftIncidentReport, draftShiftHandover } from "./reports.js";
 import { MemoryService, formatMemoryList } from "../memory/service.js";
+import { deleteEquipment } from "./equipment.js";
+import { copyButtonsFor, type CopyButton } from "./copyButtons.js";
+import { currentAbortSignal } from "../grok/abort.js";
+import { reminderDelivery } from "../reminders/delivery.js";
+import { matchingTableRows } from "../rag/table.js";
+import { escapeRichBlock, escapeRichInline, richTable, RICH_MAX_CHARS } from "../../utils/richMarkdown.js";
 
 export interface Reply {
   text: string;
   keyboard?: "menu" | "confirm";
   confirmation?: Intent;
   parseMode?: "MarkdownV2";
+  /** Telegram copy_text buttons for identifiers in the answer (IP, extension, serial, MAC, PC name). */
+  copyButtons?: CopyButton[];
+  /**
+   * Telegram rich Markdown version of the reply, sent with sendRichMessage. Set only when
+   * TELEGRAM_RICH_MESSAGES is on. `text` (with `parseMode`) is the fallback if Telegram rejects it.
+   */
+  richMarkdown?: string;
+  /**
+   * A read-only view of the user's own records (search, lists, lookups). In the team group
+   * it is sent as an ephemeral message only the asker sees. Never set this on a save,
+   * delete, reminder or anything the user must reliably receive: ephemeral delivery is
+   * not guaranteed.
+   */
+  lookup?: boolean;
 }
+
+/** Read-only intents whose answers are lookups. Anything not listed is sent normally. */
+const LOOKUP_INTENTS: ReadonlySet<Intent["intent"]> = new Set([
+  "list_tasks",
+  "list_reminders",
+  "search_notes",
+  "search_knowledge",
+  "search_documents",
+  "send_document",
+  "summarize_document",
+  "generate_daily_summary",
+]);
 
 function zoneNow(deps: Deps, user: User): DateTime {
   return deps.clock.now().setZone(user.timezone || deps.env.APP_TIMEZONE);
@@ -92,7 +124,7 @@ function filterTasks(tasks: Task[], filter: Intent["list_filter"], now: DateTime
 
 async function guardedText(deps: Deps, user: User, purpose: string, prompt: { system: string; user: string }, source: string): Promise<string | null> {
   if (!deps.llm) return null;
-  const result = await deps.llm.completeText(prompt);
+  const result = await deps.llm.completeText({ ...prompt, signal: currentAbortSignal() });
   await recordUsage(deps, user, purpose, result);
   if (introducedNetworkFacts(source, result.text).length > 0) return null;
   return result.text.trim();
@@ -166,6 +198,17 @@ export async function execute(
   intent: Intent,
   options: { confirmed: boolean; onAnalysisPreview?: (plainText: string) => Promise<void> },
 ): Promise<Reply> {
+  const reply = await executeIntent(deps, user, intent, options);
+  // A confirmation prompt ("Delete note 3?") is never a lookup, whatever the intent.
+  return LOOKUP_INTENTS.has(intent.intent) && !reply.confirmation ? { ...reply, lookup: true } : reply;
+}
+
+async function executeIntent(
+  deps: Deps,
+  user: User,
+  intent: Intent,
+  options: { confirmed: boolean; onAnalysisPreview?: (plainText: string) => Promise<void> },
+): Promise<Reply> {
   const now = zoneNow(deps, user);
   const zone = now.zoneName ?? user.timezone;
 
@@ -193,6 +236,7 @@ export async function execute(
             "If the records do not contain the answer, say so.",
           ].join(" "),
           user: `${wrapUntrusted("question", query)}\n${wrapUntrusted("saved_records", saved)}`,
+          signal: currentAbortSignal(),
         });
         await recordUsage(deps, user, "saved_answer", result);
         if (introducedNetworkFacts(saved, result.text).length > 0) return { text: `From your saved records:\n${saved}` };
@@ -351,6 +395,7 @@ export async function execute(
           at: schedule.at,
           weekday: schedule.weekdays[0] ?? null,
         }),
+        ...reminderDelivery(kind),
         createdAt: toIso(now),
       });
       if (kind === "daily_summary") await deps.db.setDailySummaryTime(user.id, schedule.at.toFormat("HH:mm"), toIso(now));
@@ -504,9 +549,15 @@ export async function execute(
       }
       if (intent.tags === "summarize" && deps.llm) {
         const summary = await guardedText(deps, user, "summarize_records", summaryPrompt(lines.join("\n")), lines.join("\n"));
-        if (summary) return { text: `${summary}\n\nSources:\n${lines.join("\n")}` };
+        if (summary) return withCopyButtons({ text: `${summary}\n\nSources:\n${lines.join("\n")}` }, lines.join("\n"));
       }
-      return { text: lines.join("\n") };
+      const rich = deps.env.TELEGRAM_RICH_MESSAGES
+        ? richSearchAnswer([
+            ...notes.map((note) => ({ source: `Note #${note.noteNumber}`, content: note.content, line: formatSearchResult("Note", note.noteNumber, note.content, query) })),
+            ...knowledge.map((entry) => ({ source: `Knowledge ${entry.entryNumber}`, content: entry.content, line: formatSearchResult(`Knowledge ${entry.entryNumber} (${entry.category})`, entry.entryNumber, entry.content, query) })),
+          ], query)
+        : null;
+      return withCopyButtons({ text: lines.join("\n"), ...(rich ? { richMarkdown: rich } : {}) }, lines.join("\n"));
     }
     case "update_note": {
       const matches = await deps.db.searchNotes(user.id, intent.search_query);
@@ -595,6 +646,38 @@ export async function execute(
       });
       return { text: `Renamed document ${renamed.documentNumber} to "${renamed.title}".` };
     }
+    case "delete_document": {
+      if (!intent.entity_number) return { text: "Which document number should I delete? For example: Delete document 3." };
+      const document = await deps.db.findDocument(user.id, intent.entity_number);
+      if (!document) return { text: `I don't have document ${intent.entity_number}.` };
+      if (!options.confirmed) {
+        return {
+          text: `Delete document ${document.documentNumber}: ${snippet(document.title)} (${snippet(document.originalFilename)})?\nThe file and its search index will be removed. Reply YES to delete it, or NO to keep it.`,
+          keyboard: "confirm",
+          confirmation: { ...intent, entity_number: document.documentNumber },
+        };
+      }
+      const deleted = await deps.db.deleteDocument(user.id, document.documentNumber, toIso(now));
+      if (!deleted) return { text: `I don't have document ${intent.entity_number}. Nothing was deleted.` };
+      await deps.db.replaceChunks(user.id, "document", deleted.id, []).catch((error: unknown) => {
+        deps.logger.warn({ event: "document_chunks_delete_failed", message: redactString(error instanceof Error ? error.message : "chunk delete failed") }, "could not clear document chunks");
+      });
+      const fileRemoved = await deps.storage.remove(deleted.storagePath).then(
+        () => true,
+        (error: unknown) => {
+          deps.logger.warn({ event: "document_file_delete_failed", documentId: deleted.id, message: redactString(error instanceof Error ? error.message : "remove failed") }, "could not remove the stored file");
+          return false;
+        },
+      );
+      await audit(deps, user, "document.delete", "document", deleted.id, { documentNumber: deleted.documentNumber, fileRemoved });
+      return {
+        text: fileRemoved
+          ? `Deleted document ${deleted.documentNumber}: ${snippet(deleted.title)}.`
+          : `Deleted document ${deleted.documentNumber} from your list, but I couldn't remove the stored file. It is no longer searchable or shareable.`,
+      };
+    }
+    case "delete_equipment":
+      return deleteEquipment(deps, user, intent, options.confirmed);
     case "save_document":
       return { text: "Attach the file in this private chat. You can add a caption such as 'Save this as Cisco network documentation.'" };
     case "prepare_incident_report": {
@@ -643,6 +726,32 @@ async function forgetMemory(deps: Deps, user: User, intent: Intent, confirmed: b
   const expired = await service.expireMemory(user.id, memory.memoryNumber);
   if (!expired) return { text: `I don't have memory ${memory.memoryNumber}.` };
   return { text: `Forgot memory ${memory.memoryNumber}.` };
+}
+
+/**
+ * Rich Markdown for a lookup where an inventory note has more than one matching row: those
+ * rows as a table, other results as escaped text. Null when no table is needed, so the
+ * plain answer is sent as before.
+ */
+function richSearchAnswer(results: Array<{ source: string; content: string; line: string }>, query: string): string | null {
+  let tables = 0;
+  const parts = results.map((result) => {
+    const matched = matchingTableRows(result.content, query);
+    const table = matched && matched.rows.length > 1 ? richTable(matched.headers, matched.rows) : null;
+    if (!table) return escapeRichBlock(result.line);
+    tables += 1;
+    const dropped = table.droppedColumns > 0 ? `\n\n${escapeRichInline(`${table.droppedColumns} more columns are not shown.`)}` : "";
+    return `${escapeRichInline(`${result.source}: ${matched?.rows.length ?? 0} matches`)}\n\n${table.markdown}${dropped}`;
+  });
+  if (tables === 0) return null;
+  const markdown = parts.join("\n\n");
+  return markdown.length <= RICH_MAX_CHARS ? markdown : null;
+}
+
+/** Adds copy buttons for identifiers in `records`, the saved text the answer was built from. */
+function withCopyButtons(reply: Reply, records: string): Reply {
+  const copyButtons = copyButtonsFor(records);
+  return copyButtons.length > 0 ? { ...reply, copyButtons } : reply;
 }
 
 function formatSearchResult(label: string, number: number, content: string, query: string): string {

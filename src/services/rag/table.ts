@@ -107,6 +107,20 @@ export function focusTabularRecord(content: string, question: string): string | 
   return cards.length > 0 ? cards.join("\n\n") : null;
 }
 
+/**
+ * The header and every row of a semicolon inventory that match the question, for a table
+ * reply. Null when the content is not an inventory or nothing matches. Same matching as
+ * focusTabularRecord, without its three-card cap.
+ */
+export function matchingTableRows(content: string, question: string, maxRows = 50): { headers: string[]; rows: string[][] } | null {
+  const table = parseSemicolonTable(content);
+  if (!table) return null;
+  const tokens = queryTokens(question);
+  if (tokens.length === 0) return null;
+  const rows = table.rows.filter((row) => rowMatches(row.join(" "), tokens)).slice(0, maxRows);
+  return rows.length > 0 ? { headers: table.headers, rows } : null;
+}
+
 const HOST = String.raw`HADX[A-Za-z0-9-]{4,}`;
 const EXTENSION = String.raw`\d{3,5}(?:[/\\]\d+)?`;
 

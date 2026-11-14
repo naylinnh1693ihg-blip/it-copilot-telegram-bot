@@ -223,6 +223,8 @@ export class MemoryDatabase implements Database {
     if (existing) return { reminder: copy(existing), created: false };
     const reminder: Reminder = {
       ...input,
+      deliveryChatId: input.deliveryChatId ?? null,
+      deliveryThreadId: input.deliveryThreadId ?? null,
       id: randomUUID(),
       reminderNumber: this.nextCounter(input.userId, "reminder"),
       attemptOccurrenceAt: null,
@@ -412,6 +414,13 @@ export class MemoryDatabase implements Database {
     const document = this.documents.find((item) => item.userId === userId && item.documentNumber === documentNumber && !item.deletedAt);
     if (!document) return null;
     document.title = title;
+    return copy(document);
+  }
+
+  async deleteDocument(userId: string, documentNumber: number, deletedAt: string): Promise<DocumentRecord | null> {
+    const document = this.documents.find((item) => item.userId === userId && item.documentNumber === documentNumber && !item.deletedAt);
+    if (!document) return null;
+    document.deletedAt = deletedAt;
     return copy(document);
   }
 

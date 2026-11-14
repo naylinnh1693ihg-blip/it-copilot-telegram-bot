@@ -47,6 +47,9 @@ export interface NewReminder {
   status: ReminderStatus;
   dedupeKey: string;
   createdAt: string;
+  /** Set when the reminder was created in the team group. Omitted: private chat. */
+  deliveryChatId?: number | null;
+  deliveryThreadId?: number | null;
 }
 
 export interface NewNote {
@@ -250,6 +253,8 @@ export interface Database {
   searchKnowledge(userId: string, query: string): Promise<KnowledgeEntry[]>;
   insertDocument(input: NewDocument): Promise<DocumentRecord>;
   renameDocument(userId: string, documentNumber: number, title: string): Promise<DocumentRecord | null>;
+  /** Soft-deletes a live document. Returns null when it does not exist or is already deleted. */
+  deleteDocument(userId: string, documentNumber: number, deletedAt: string): Promise<DocumentRecord | null>;
   findDocument(userId: string, documentNumber: number): Promise<DocumentRecord | null>;
   findDocumentByHash(userId: string, sha256: string): Promise<DocumentRecord | null>;
   listDocuments(userId: string): Promise<DocumentRecord[]>;

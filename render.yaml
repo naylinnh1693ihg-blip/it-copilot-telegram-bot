@@ -17,6 +17,10 @@ services:
         value: https://api.telegram.org
       - key: APP_TIMEZONE
         value: Asia/Dubai
+      # Backup trigger. The main one is Supabase pg_cron calling POST /internal/reminders/process
+      # every minute (supabase/migrations/20261115010000_reminder_cron.sql), which also keeps
+      # this free service awake. Both can run together: claim_due_reminders uses
+      # FOR UPDATE SKIP LOCKED, so a reminder is never sent twice.
       - key: REMINDER_POLL_MS
         value: "30000"
       - key: XAI_MODEL
@@ -32,6 +36,10 @@ services:
       - key: TELEGRAM_OWNER_ID
         sync: false
       - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
+      # Bearer token for POST /internal/reminders/process. Must equal the Vault secret
+      # 'reminder_cron_secret' in Supabase, or every cron call gets 401.
+      - key: CRON_SECRET
         sync: false
       - key: PUBLIC_BASE_URL
         sync: false

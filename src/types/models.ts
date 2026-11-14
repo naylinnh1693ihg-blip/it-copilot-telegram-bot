@@ -63,6 +63,10 @@ export interface Reminder {
   lockedUntil: string | null;
   lockToken: string | null;
   lastError: string | null;
+  /** Team group the reminder was created in. Null: the owner's private chat. */
+  deliveryChatId: number | null;
+  /** Forum topic in that group, so the reminder lands where it was asked for. */
+  deliveryThreadId: number | null;
   createdAt: string;
   updatedAt: string;
 }

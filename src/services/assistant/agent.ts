@@ -5,6 +5,7 @@ import { wrapUntrusted } from "../../utils/security.js";
 import { redactString } from "../../utils/text.js";
 import { toIso } from "../../utils/time.js";
 import { formatWebSearchReply, type Reply } from "./execute.js";
+import { currentAbortSignal } from "../grok/abort.js";
 
 const MAX_ROUNDS = 4;
 
@@ -62,7 +63,7 @@ export async function runGrokAgent(
   let answer = "";
 
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
-    const turn = await deps.llm.completeWithTools({ system, user: userText, tools, input });
+    const turn = await deps.llm.completeWithTools({ system, user: userText, tools, input, signal: currentAbortSignal() });
     await recordUsage(deps, user, turn.inputTokens, turn.outputTokens);
     if (turn.functionCalls.length === 0) {
       answer = turn.text.trim();

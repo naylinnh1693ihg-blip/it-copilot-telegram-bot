@@ -12,7 +12,7 @@ const SECRET = "a".repeat(64);
 
 function adminDeps(overrides: Record<string, string> = {}) {
   const made = testDeps({ ADMIN_ENABLED: "true", ADMIN_SESSION_SECRET: SECRET, PUBLIC_BASE_URL: "https://copilot.test", ...overrides });
-  let now = DateTime.fromISO(NOW, { zone: ZONE });
+  const now = DateTime.fromISO(NOW, { zone: ZONE });
   made.deps.clock = { now: () => now };
   return made;
 }

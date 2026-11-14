@@ -245,6 +245,8 @@ function reminderFrom(row: Row): Reminder {
     lockedUntil: textOrNull(row, "locked_until"),
     lockToken: textOrNull(row, "lock_token"),
     lastError: textOrNull(row, "last_error"),
+    deliveryChatId: row.delivery_chat_id == null ? null : Number(row.delivery_chat_id),
+    deliveryThreadId: row.delivery_thread_id == null ? null : integer(row, "delivery_thread_id"),
     createdAt: text(row, "created_at"),
     updatedAt: text(row, "updated_at"),
   };
@@ -516,6 +518,8 @@ export class SupabaseDatabase implements Database {
         interval_minutes: input.intervalMinutes,
         status: input.status,
         dedupe_key: input.dedupeKey,
+        delivery_chat_id: input.deliveryChatId ?? null,
+        delivery_thread_id: input.deliveryThreadId ?? null,
         created_at: input.createdAt,
       })
       .select("*")
@@ -834,6 +838,19 @@ export class SupabaseDatabase implements Database {
     const { data, error } = await this.client
       .from("documents")
       .update({ title })
+      .eq("user_id", userId)
+      .eq("document_number", documentNumber)
+      .is("deleted_at", null)
+      .select("*")
+      .maybeSingle();
+    this.raise(error);
+    return isRow(data) ? documentFrom(data) : null;
+  }
+
+  async deleteDocument(userId: string, documentNumber: number, deletedAt: string): Promise<DocumentRecord | null> {
+    const { data, error } = await this.client
+      .from("documents")
+      .update({ deleted_at: deletedAt })
       .eq("user_id", userId)
       .eq("document_number", documentNumber)
       .is("deleted_at", null)

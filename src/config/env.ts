@@ -3,11 +3,37 @@ import { z } from "zod";
 const schema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().default(""),
   TELEGRAM_OWNER_ID: z.string().regex(/^\d*$/).default(""),
+  /** Team members' numeric Telegram user ids, comma-separated. Each member gets their own records. */
+  TELEGRAM_TEAM_IDS: z
+    .string()
+    .default("")
+    .refine((value) => /^\s*(?:\d+\s*(?:,\s*\d+\s*)*,?\s*)?$/.test(value), {
+      message: "use numeric Telegram user ids separated by commas, e.g. 111111111,222222222",
+    })
+    .transform((value) => [...new Set(value.split(",").map((id) => id.trim()).filter(Boolean))]),
+  /** The team supergroup's chat id (negative, e.g. -1001234567890). Every other group is refused and left. */
+  TELEGRAM_TEAM_CHAT_ID: z
+    .string()
+    .default("")
+    .transform((value) => value.trim())
+    .refine((value) => value === "" || /^-\d+$/.test(value), { message: "use the group's negative chat id, e.g. -1001234567890" }),
   TELEGRAM_WEBHOOK_SECRET: z.string().default(""),
+  /** Concurrent HTTPS connections Telegram may open to the webhook. Telegram allows 1-100. One Node process, so keep it low. */
+  TELEGRAM_WEBHOOK_MAX_CONNECTIONS: z.coerce.number().int().min(1).max(100).default(10),
   TELEGRAM_MODE: z.enum(["polling", "webhook"]).default("polling"),
   TELEGRAM_API_ROOT: z.string().url().default("https://api.telegram.org"),
   /** Minimum gap between edits of one streaming message. Telegram allows about one edit per second per chat. */
   TELEGRAM_EDIT_INTERVAL_MS: z.coerce.number().int().min(1_000).max(5_000).default(1_100),
+  /** Send document summaries and inventory tables as Telegram rich messages. Anything other than "true" keeps plain/MarkdownV2 replies. */
+  TELEGRAM_RICH_MESSAGES: z
+    .string()
+    .default("false")
+    .transform((value) => value.trim().toLowerCase() === "true"),
+  /** After an ephemeral lookup answer in the team group, also post "Sent you the answer privately 👀" for everyone. */
+  TELEGRAM_EPHEMERAL_NOTICE: z
+    .string()
+    .default("false")
+    .transform((value) => value.trim().toLowerCase() === "true"),
   PUBLIC_BASE_URL: z.string().default(""),
   XAI_API_KEY: z.string().default(""),
   XAI_MODEL: z.string().min(1).default("grok-4.7"),

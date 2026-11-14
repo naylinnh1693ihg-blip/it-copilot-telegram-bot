@@ -1,4 +1,5 @@
-import { GrokError } from "../../utils/errors.js";
+import { GenerationStoppedError, GrokError } from "../../utils/errors.js";
+import { currentAbortSignal } from "./abort.js";
 import { createPreviewGate } from "./streamPreview.js";
 
 export interface LlmResult {
@@ -10,6 +11,7 @@ export interface LlmResult {
 export interface LlmRequestPolicy {
   timeoutMs?: number;
   retry?: boolean;
+  signal?: AbortSignal;
 }
 
 export interface ToolCall {
@@ -32,12 +34,15 @@ export interface LlmClient {
     model?: string;
     timeoutMs?: number;
     retry?: boolean;
+    /** Cancels the request (Telegram Stop button). Defaults to the ambient signal from withAbortSignal. */
+    signal?: AbortSignal;
   }): Promise<LlmResult>;
   completeText(input: {
     system: string;
     user: string;
     webSearch?: boolean;
     images?: Array<{ mime: "image/jpeg" | "image/png"; base64: string }>;
+    signal?: AbortSignal;
   }): Promise<LlmResult>;
   completeWithTools?(input: {
     system: string;
@@ -45,6 +50,7 @@ export interface LlmClient {
     tools: Array<Record<string, unknown>>;
     /** Full Responses API input for a follow-up turn. The first turn builds input from system and user. */
     input?: unknown[];
+    signal?: AbortSignal;
   }): Promise<AgentTurn>;
   embed?(input: { texts: string[]; model: string; dimensions: number }): Promise<{ vectors: number[][]; inputTokens: number }>;
   streamStructured?(input: {
@@ -59,6 +65,7 @@ export interface LlmClient {
     onDelta?: (snapshot: string) => Promise<void> | void;
     timeoutMs?: number;
     retry?: boolean;
+    signal?: AbortSignal;
   }): Promise<LlmResult>;
   /** Plain-text stream. Previews are throttled. The returned text is the full answer. */
   streamText?(input: {
@@ -67,6 +74,7 @@ export interface LlmClient {
     images?: Array<{ mime: "image/jpeg" | "image/png"; base64: string }>;
     minIntervalMs?: number;
     onDelta?: (snapshot: string) => Promise<void> | void;
+    signal?: AbortSignal;
   }): Promise<LlmResult>;
 }
 
@@ -78,12 +86,17 @@ export interface ResponseStreamEvent {
   errorMessage?: string;
 }
 
+export interface RequestOptions {
+  timeout?: number;
+  signal?: AbortSignal;
+}
+
 export interface ResponseStreamCreate {
-  (body: Record<string, unknown>, options?: { timeout?: number }): AsyncIterable<ResponseStreamEvent>;
+  (body: Record<string, unknown>, options?: RequestOptions): AsyncIterable<ResponseStreamEvent>;
 }
 
 export interface ResponseCreate {
-  (body: Record<string, unknown>, options?: { timeout?: number }): Promise<{
+  (body: Record<string, unknown>, options?: RequestOptions): Promise<{
     output_text?: string | null;
     usage?: { input_tokens?: number; output_tokens?: number } | null;
     output?: unknown;
@@ -113,6 +126,17 @@ function statusOf(error: unknown): number {
   return Number.isInteger(status) ? status : 0;
 }
 
+/** The SDK request options for one call. Undefined when there is nothing to set. */
+function requestOptions(timeoutMs?: number, signal?: AbortSignal): RequestOptions | undefined {
+  if (!timeoutMs && !signal) return undefined;
+  return { ...(timeoutMs ? { timeout: timeoutMs } : {}), ...(signal ? { signal } : {}) };
+}
+
+/** A stop is reported as GenerationStoppedError, whatever the SDK threw (APIUserAbortError, AbortError). */
+function stopIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new GenerationStoppedError();
+}
+
 function asGrokError(error: unknown): GrokError {
   if (error instanceof GrokError) return error;
   const status = statusOf(error);
@@ -134,9 +158,11 @@ export function createResilientClient(options: {
     expectJson: boolean,
     policy: LlmRequestPolicy = {},
   ): Promise<LlmResult> {
+    const signal = policy.signal ?? currentAbortSignal();
     const attempt = async (): Promise<LlmResult> => {
+      stopIfAborted(signal);
       try {
-        const response = await options.create(body, policy.timeoutMs ? { timeout: policy.timeoutMs } : undefined);
+        const response = await options.create(body, requestOptions(policy.timeoutMs, signal));
         const text = response.output_text?.trim() ?? "";
         if (!text) throw new GrokError("The model returned an empty response.", true);
         if (expectJson) {
@@ -152,6 +178,7 @@ export function createResilientClient(options: {
           outputTokens: response.usage?.output_tokens ?? 0,
         };
       } catch (error) {
+        stopIfAborted(signal);
         throw asGrokError(error);
       }
     };
@@ -159,6 +186,7 @@ export function createResilientClient(options: {
     try {
       return await attempt();
     } catch (error) {
+      if (error instanceof GenerationStoppedError) throw error;
       const grokError = asGrokError(error);
       if (policy.retry === false || !grokError.retryable) throw grokError;
       await sleep(400);
@@ -195,9 +223,12 @@ export function createResilientClient(options: {
       onDelta?: (snapshot: string) => Promise<void> | void;
       timeoutMs?: number;
       retry?: boolean;
+      signal?: AbortSignal;
     },
   ): Promise<LlmResult> {
+    const signal = hooks.signal ?? currentAbortSignal();
     const read = async (): Promise<LlmResult> => {
+      stopIfAborted(signal);
       let text = "";
       let inputTokens = 0;
       let outputTokens = 0;
@@ -206,10 +237,7 @@ export function createResilientClient(options: {
         publish: (snapshot) => hooks.onDelta?.(snapshot),
       });
       try {
-        for await (const event of options.stream!(
-          request,
-          hooks.timeoutMs ? { timeout: hooks.timeoutMs } : undefined,
-        )) {
+        for await (const event of options.stream!(request, requestOptions(hooks.timeoutMs, signal))) {
           if (event.type === "response.output_text.delta" && event.delta) {
             text += event.delta;
             await gate.push(text);
@@ -222,8 +250,10 @@ export function createResilientClient(options: {
           }
         }
       } catch (error) {
+        stopIfAborted(signal);
         throw asGrokError(error);
       }
+      stopIfAborted(signal);
       if (!text.trim()) throw new GrokError("The model returned an empty response.", true);
       await gate.flush();
       if (hooks.expectJson) {
@@ -239,6 +269,7 @@ export function createResilientClient(options: {
     try {
       return await read();
     } catch (error) {
+      if (error instanceof GenerationStoppedError) throw error;
       const grokError = asGrokError(error);
       if (hooks.retry === false || !grokError.retryable) throw grokError;
       await sleep(400);
@@ -261,7 +292,7 @@ export function createResilientClient(options: {
           },
         },
         true,
-        { timeoutMs: input.timeoutMs, retry: input.retry },
+        { timeoutMs: input.timeoutMs, retry: input.retry, signal: input.signal },
       );
     },
     async streamStructured(input) {
@@ -277,7 +308,7 @@ export function createResilientClient(options: {
         },
       };
       if (!options.stream) {
-        return call(request, true, { timeoutMs: input.timeoutMs, retry: input.retry });
+        return call(request, true, { timeoutMs: input.timeoutMs, retry: input.retry, signal: input.signal });
       }
       return readStream({ ...request, stream: true }, {
         expectJson: true,
@@ -285,29 +316,33 @@ export function createResilientClient(options: {
         onDelta: input.onDelta,
         timeoutMs: input.timeoutMs,
         retry: input.retry,
+        signal: input.signal,
       });
     },
     async streamText(input) {
       const request = base(input.system, input.user, input.images);
-      if (!options.stream) return call(request, false);
+      if (!options.stream) return call(request, false, { signal: input.signal });
       return readStream({ ...request, stream: true }, {
         expectJson: false,
         minIntervalMs: input.minIntervalMs,
         onDelta: input.onDelta,
+        signal: input.signal,
       });
     },
     completeText(input) {
       const request = base(input.system, input.user, input.images);
       if (input.webSearch) request.tools = [{ type: "web_search" }];
-      return call(request, false);
+      return call(request, false, { signal: input.signal });
     },
     async completeWithTools(input) {
       const request = input.input
         ? { model: options.model, store: false, input: input.input, tools: input.tools }
         : { ...base(input.system, input.user), tools: input.tools };
+      const signal = input.signal ?? currentAbortSignal();
       const attempt = async (): Promise<AgentTurn> => {
+        stopIfAborted(signal);
         try {
-          const response = await options.create(request);
+          const response = await options.create(request, requestOptions(undefined, signal));
           const functionCalls = functionCallsFrom(response.output);
           const text = response.output_text?.trim() ?? "";
           if (!text && functionCalls.length === 0) throw new GrokError("The model returned an empty response.", true);
@@ -318,12 +353,14 @@ export function createResilientClient(options: {
             outputTokens: response.usage?.output_tokens ?? 0,
           };
         } catch (error) {
+          stopIfAborted(signal);
           throw asGrokError(error);
         }
       };
       try {
         return await attempt();
       } catch (error) {
+        if (error instanceof GenerationStoppedError) throw error;
         const grokError = asGrokError(error);
         if (!grokError.retryable) throw grokError;
         await sleep(400);

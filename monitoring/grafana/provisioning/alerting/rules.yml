@@ -1,0 +1,83 @@
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: application
+    folder: IT Work Copilot
+    interval: 1m
+    rules:
+      - uid: copilot-app-down
+        title: Application unavailable
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              datasource:
+                type: prometheus
+                uid: prometheus
+              editorMode: code
+              expr: up{job="it-work-copilot"} == 0
+              instant: true
+              refId: A
+              range: false
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 2m
+        annotations:
+          summary: The application health metrics endpoint is unavailable.
+        labels:
+          severity: critical
+      - uid: copilot-http-errors
+        title: Application HTTP 5xx errors
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              datasource:
+                type: prometheus
+                uid: prometheus
+              editorMode: code
+              expr: sum(rate(it_work_http_errors_total[5m])) > 0
+              instant: true
+              refId: A
+              range: false
+        noDataState: OK
+        execErrState: Error
+        for: 2m
+        annotations:
+          summary: The application returned server errors during the last five minutes.
+        labels:
+          severity: warning
+      - uid: copilot-http-latency
+        title: Application HTTP latency high
+        condition: A
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: prometheus
+            model:
+              datasource:
+                type: prometheus
+                uid: prometheus
+              editorMode: code
+              expr: histogram_quantile(0.95, sum by (le) (rate(it_work_http_request_duration_seconds_bucket[5m]))) > 2
+              instant: true
+              refId: A
+              range: false
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        annotations:
+          summary: The 95th percentile HTTP request duration exceeded two seconds.
+        labels:
+          severity: warning

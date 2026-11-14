@@ -19,7 +19,20 @@ export class GrokError extends Error {
   }
 }
 
+/** The user pressed Stop. Not a failure: it is never retried, logged as an error, or recorded as a failed call. */
+export class GenerationStoppedError extends Error {
+  constructor() {
+    super("Generation stopped by the user.");
+    this.name = "GenerationStoppedError";
+  }
+}
+
+export function isGenerationStopped(error: unknown): boolean {
+  return error instanceof GenerationStoppedError;
+}
+
 export function toUserMessage(error: unknown): string {
+  if (error instanceof GenerationStoppedError) return "Stopped.";
   if (error instanceof AppError) return error.userMessage;
   if (error instanceof GrokError) {
     if (error.status === 402) {

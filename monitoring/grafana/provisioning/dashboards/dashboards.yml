@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: Local monitoring
+    orgId: 1
+    folder: IT Work Copilot
+    type: file
+    disableDeletion: true
+    editable: false
+    options:
+      path: /etc/grafana/provisioning/dashboards

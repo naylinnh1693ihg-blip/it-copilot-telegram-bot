@@ -4,7 +4,9 @@ import type { User, Equipment, EquipmentKind } from "../../types/models.js";
 import { wrapUntrusted } from "../../utils/security.js";
 import { secretRisk } from "../../utils/text.js";
 import { toIso } from "../../utils/time.js";
+import type { Intent } from "../../types/intent.js";
 import type { Reply } from "./execute.js";
+import { copyButtonsFor } from "./copyButtons.js";
 
 const TYPE_LABEL: Record<EquipmentKind, string> = {
   printer: "Printer",
@@ -109,6 +111,7 @@ export function parseEquipmentCommand(text: string): EquipmentCommand | null {
 export function formatEquipmentCard(item: Equipment, source: string | null): string {
   const lines = [
     `Equipment: ${item.name}`,
+    `Number: ${item.equipmentNumber}`,
     `Type: ${TYPE_LABEL[item.kind]}`,
     `Location: ${item.location}`,
     `IP: ${item.ipAddress}`,
@@ -132,8 +135,9 @@ export async function handleEquipment(deps: Deps, user: User, command: Equipment
     "equipment handled locally",
   );
   if (command.action === "clarify") return { text: command.question };
-  if (command.action === "list") return listEquipment(deps, user, command.kind);
-  if (command.action === "show") return showEquipment(deps, user, command.query);
+  // Lookups only; saving or extracting a card is a save and is sent normally.
+  if (command.action === "list") return { ...(await listEquipment(deps, user, command.kind)), lookup: true };
+  if (command.action === "show") return { ...(await showEquipment(deps, user, command.query)), lookup: true };
   return saveDraft(deps, user, command, null, null);
 }
 
@@ -278,7 +282,9 @@ async function showEquipment(deps: Deps, user: User, query: string): Promise<Rep
   if (cards.length === 0) return { text: `I don't have equipment matching "${query}".` };
   const rendered = await Promise.all(cards.map(async (item) => formatEquipmentCard(item, await sourceLabel(deps, user, item))));
   const heading = cards.length === 1 ? "" : `I found ${cards.length} matches:\n\n`;
-  return { text: `${heading}${rendered.join("\n\n")}` };
+  // Cards print "IP: x", so this gives one IP button per matching device.
+  const copyButtons = copyButtonsFor(cards.map((item) => `IP: ${item.ipAddress}`).join("\n"));
+  return { text: `${heading}${rendered.join("\n\n")}`, ...(copyButtons.length > 0 ? { copyButtons } : {}) };
 }
 
 async function extractEquipment(
@@ -353,6 +359,57 @@ async function loadSource(
   const extraction = await deps.db.getExtraction(document.id);
   if (!extraction?.text.trim()) return { ok: false, text: `Document ${command.number} has no extracted text yet.` };
   return { ok: true, body: `${document.title}\n${extraction.text}`.slice(0, 24_000), noteId: null, documentId: document.id };
+}
+
+/**
+ * "Delete equipment 3" or "Delete equipment HP LaserJet". Asks for confirmation first; the
+ * confirmation stores the card number so YES deletes exactly the card that was shown.
+ */
+export async function deleteEquipment(deps: Deps, user: User, intent: Intent, confirmed: boolean): Promise<Reply> {
+  const cards = await deps.db.listEquipment(user.id);
+  const query = intent.search_query.trim();
+  if (!intent.entity_number && !query) {
+    return { text: "Which equipment should I delete? For example: Delete equipment HP LaserJet." };
+  }
+  const found = intent.entity_number
+    ? cards.filter((item) => item.equipmentNumber === intent.entity_number)
+    : exactOrPartial(cards, query);
+  const label = intent.entity_number ? `equipment ${intent.entity_number}` : `equipment matching "${query}"`;
+  if (found.length === 0) return { text: `I don't have ${label}.` };
+  if (found.length > 1) {
+    const list = found.map((item) => `${item.equipmentNumber}. ${item.name} (${item.ipAddress}, ${item.location})`).join("\n");
+    return { text: `More than one card matches. Tell me the number, for example "Delete equipment ${found[0]?.equipmentNumber}":\n${list}` };
+  }
+  const item = found[0];
+  if (!item) return { text: `I don't have ${label}.` };
+  if (!confirmed) {
+    return {
+      text: `Delete equipment ${item.equipmentNumber}: ${item.name} (${item.ipAddress}, ${item.location})?\nReply YES to delete it, or NO to keep it.`,
+      keyboard: "confirm",
+      confirmation: { ...intent, entity_number: item.equipmentNumber, search_query: "" },
+    };
+  }
+  const now = toIso(deps.clock.now());
+  const deleted = await deps.db.updateEquipment({ ...item, deletedAt: now, updatedAt: now });
+  if (!deleted.deletedAt) return { text: `I couldn't delete equipment ${item.equipmentNumber}.` };
+  await deps.db.writeAudit({
+    userId: user.id,
+    action: "equipment.delete",
+    entity: "equipment",
+    entityId: deleted.id,
+    metadata: { equipmentNumber: deleted.equipmentNumber },
+    createdAt: now,
+  }).catch((error: unknown) => {
+    deps.logger.warn({ event: "audit_failed", message: error instanceof Error ? error.message : "audit failed" }, "audit failed");
+  });
+  return { text: `Deleted equipment ${deleted.equipmentNumber}: ${deleted.name}.` };
+}
+
+/** An exact name or IP match wins over partial name matches, so "Printer" doesn't also hit "Printer 2". */
+function exactOrPartial(cards: Equipment[], query: string): Equipment[] {
+  const q = query.toLowerCase().replace(/^the\s+/, "");
+  const exact = cards.filter((item) => item.name.toLowerCase() === q || item.ipAddress === q);
+  return exact.length > 0 ? exact : cards.filter((item) => matches(item, query));
 }
 
 async function sourceLabel(deps: Deps, user: User, item: Equipment): Promise<string | null> {

@@ -6,6 +6,8 @@ import { wrapUntrusted } from "../../utils/security.js";
 import { analysisModelConfig, chooseAnalysisModel } from "./analysisModel.js";
 import type { VisionImage } from "./vision.js";
 import { toIso } from "../../utils/time.js";
+import { currentAbortSignal } from "../grok/abort.js";
+import { escapeRichBlock, escapeRichInline, RICH_MAX_CHARS } from "../../utils/richMarkdown.js";
 
 const MAX_GROK_INPUT = 12_000;
 const MAX_TELEGRAM_REPLY = 3_500;
@@ -51,7 +53,7 @@ export const DOCUMENT_ANALYSIS_JSON_SCHEMA: Record<string, unknown> = {
   },
 };
 
-interface Analysis {
+export interface Analysis {
   notes: string[];
   summary: string;
   language: string;
@@ -155,6 +157,27 @@ function formatTelegramMarkdown(analysis: Analysis): string {
   return `${prefix}${lines.join("").trimEnd()}${summaryHeader}${summaryText}${languageLine}`;
 }
 
+/** Above this, the summary is folded into a collapsible block so the key notes stay in view. */
+const RICH_SUMMARY_FOLD_CHARS = 600;
+
+/**
+ * Rich Markdown version of the analysis: "Key notes" heading and list, "Summary" heading,
+ * and a collapsible block for a long summary. Every piece of model output is escaped.
+ */
+export function formatRichSummary(analysis: Analysis): string {
+  const notes = analysis.notes.slice(0, 20).map((note) => `- ${escapeRichInline(note.length > 500 ? `${note.slice(0, 499)}…` : note)}`);
+  if (notes.length === 0) throw new AppError("Grok returned no key notes. Please try again.");
+  const language = analysis.language ? `\n\nLanguage: ${escapeRichInline(analysis.language)}` : "";
+  const head = `## Key notes\n\n${notes.join("\n")}\n\n## Summary\n\n`;
+  const room = RICH_MAX_CHARS - head.length - language.length - 200;
+  const summaryText = analysis.summary.length > room ? `${analysis.summary.slice(0, Math.max(0, room - 1))}…` : analysis.summary;
+  const summary = escapeRichBlock(summaryText) || escapeRichInline("No summary.");
+  const body = analysis.summary.length > RICH_SUMMARY_FOLD_CHARS
+    ? `<details><summary>Show the full summary</summary>\n\n${summary}\n\n</details>`
+    : summary;
+  return `${head}${body}${language}`;
+}
+
 export async function summarizeDocument(
   deps: Deps,
   user: User,
@@ -163,7 +186,7 @@ export async function summarizeDocument(
   images: VisionImage[] = [],
   visionNote = "",
   onPreview?: (plainText: string) => Promise<void>,
-): Promise<{ text: string; parseMode: "MarkdownV2"; notes: string[]; summary: string }> {
+): Promise<{ text: string; parseMode: "MarkdownV2"; richMarkdown?: string; notes: string[]; summary: string }> {
   if (!text.trim() && images.length === 0) {
     throw new AppError("I couldn't extract readable text from this file, so I couldn't analyze it.");
   }
@@ -230,6 +253,7 @@ export async function summarizeDocument(
     ? await deps.llm.streamStructured({
         ...request,
         minIntervalMs: deps.env.TELEGRAM_EDIT_INTERVAL_MS,
+        signal: currentAbortSignal(),
         onDelta: async (snapshot) => {
           if (onPreview) await onPreview(previewDocumentAnalysis(snapshot));
         },
@@ -256,5 +280,13 @@ export async function summarizeDocument(
   }
   if (extractionTruncated) analysis.notes.unshift("The extracted text was truncated because the file was exceptionally long.");
   if (visionNote) analysis.notes.unshift(visionNote);
-  return { text: formatTelegramMarkdown(analysis), parseMode: "MarkdownV2", notes: indexedNotes, summary: analysis.summary };
+  // MarkdownV2 stays as the text: it is the reply when rich messages are off, and the
+  // fallback if Telegram rejects the rich message.
+  return {
+    text: formatTelegramMarkdown(analysis),
+    parseMode: "MarkdownV2",
+    ...(deps.env.TELEGRAM_RICH_MESSAGES ? { richMarkdown: formatRichSummary(analysis) } : {}),
+    notes: indexedNotes,
+    summary: analysis.summary,
+  };
 }

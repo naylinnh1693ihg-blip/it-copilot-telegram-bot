@@ -2,7 +2,7 @@ import type { Deps } from "../../app/deps.js";
 import { IntentSchema, INTENT_JSON_SCHEMA, blankIntent, type Intent } from "../../types/intent.js";
 import type { User } from "../../types/models.js";
 import { intentPrompt } from "../grok/prompts.js";
-import { AppError, GrokError, toUserMessage } from "../../utils/errors.js";
+import { AppError, GrokError, isGenerationStopped, toUserMessage } from "../../utils/errors.js";
 import { redactString } from "../../utils/text.js";
 import { toIso } from "../../utils/time.js";
 import { runGrokAgent, toolsForMessage } from "./agent.js";
@@ -13,6 +13,7 @@ import { linkNoteCommand, parseNoteLinkCommand } from "../notes/links.js";
 import { createManyTasks, extractLocalTasks, extractTasksWithGrok } from "./multiTask.js";
 import { createManyReminders, extractLocalReminders, extractRemindersWithGrok } from "./multiReminder.js";
 import { answerWithRag, looksLikeQuestion } from "../rag/retrieve.js";
+import { currentAbortSignal } from "../grok/abort.js";
 
 async function interpret(
   deps: Deps,
@@ -53,6 +54,7 @@ async function interpret(
       user: prompt.user,
       schemaName: "copilot_intent",
       schema: INTENT_JSON_SCHEMA,
+      signal: currentAbortSignal(),
     });
     await deps.db.recordUsage({
       userId: user.id,
@@ -72,6 +74,8 @@ async function interpret(
     }
     return parsed.data;
   } catch (error) {
+    // After Stop, don't fall back to the local parser and act anyway.
+    if (isGenerationStopped(error)) throw error;
     deps.logger.warn({ event: "grok_intent_failed", message: redactString(error instanceof Error ? error.message : "error") }, "using local parser");
     if (local) return local;
     if (error instanceof GrokError) throw error;
@@ -226,6 +230,8 @@ export async function handleText(
     await remember(deps, user, cleaned, reply.text);
     return reply;
   } catch (error) {
+    // deliver() turns a stop into the "(Stopped.)" reply; it is not a failure.
+    if (isGenerationStopped(error)) throw error;
     deps.logger.error({ event: "message_failed", message: redactString(error instanceof Error ? error.message : "error") }, "message failed");
     return { text: toUserMessage(error) };
   }

@@ -19,6 +19,8 @@ export const INTENT_NAMES = [
   "summarize_document",
   "send_document",
   "rename_document",
+  "delete_document",
+  "delete_equipment",
   "search_knowledge",
   "search_web",
   "save_knowledge",

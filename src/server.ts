@@ -3,8 +3,9 @@ import { adminAppEnabled, missingRuntimeSettings, parseEnv } from "./config/env.
 import { createSupabaseClient, SupabaseDatabase } from "./database/supabase.js";
 import { createSupabaseStorage } from "./services/documents/storage.js";
 import { createXaiClient } from "./services/grok/xai.js";
-import { createBot, telegramWebhook } from "./bot/index.js";
+import { ALLOWED_UPDATES, createBot, telegramWebhook, webhookOptions } from "./bot/index.js";
 import { inlineButtons } from "./bot/keyboards/menus.js";
+import { syncBotProfile } from "./bot/profile.js";
 import { createHttpApp } from "./routes/http.js";
 import { processDueReminders } from "./jobs/processReminders.js";
 import { createLogger } from "./utils/logger.js";
@@ -57,12 +58,19 @@ async function main(): Promise<void> {
   }
 
   const bot = createBot(env.TELEGRAM_BOT_TOKEN, deps);
-  const sendReminder = async (telegramUserId: number, text: string, buttons?: Array<{ label: string; data: string }>) => {
-    const sent = await bot.api.sendMessage(
-      telegramUserId,
-      text,
-      buttons?.length ? { reply_markup: inlineButtons(buttons) } : undefined,
-    );
+  // Command menu and descriptions come from code. Not awaited: it is cosmetic, logs its own
+  // failures, and must not delay or stop startup in webhook or polling mode.
+  void syncBotProfile(bot.api, logger);
+  const sendReminder = async (
+    chatId: number,
+    text: string,
+    buttons?: Array<{ label: string; data: string }>,
+    options?: { threadId?: number },
+  ) => {
+    const sent = await bot.api.sendMessage(chatId, text, {
+      ...(buttons?.length ? { reply_markup: inlineButtons(buttons) } : {}),
+      ...(options?.threadId ? { message_thread_id: options.threadId } : {}),
+    });
     return { messageId: sent.message_id };
   };
   const app = createHttpApp(deps, {
@@ -76,10 +84,14 @@ async function main(): Promise<void> {
 
   if (env.TELEGRAM_MODE === "webhook") {
     const endpoint = `${env.PUBLIC_BASE_URL.replace(/\/$/, "")}/telegram/webhook`;
-    await bot.api.setWebhook(endpoint, { secret_token: env.TELEGRAM_WEBHOOK_SECRET });
-    logger.info({ event: "webhook_set", endpoint }, "telegram webhook registered");
+    await bot.api.setWebhook(endpoint, webhookOptions(env));
+    logger.info(
+      { event: "webhook_set", endpoint, maxConnections: env.TELEGRAM_WEBHOOK_MAX_CONNECTIONS },
+      "telegram webhook registered",
+    );
   } else {
     void bot.start({
+      allowed_updates: ALLOWED_UPDATES,
       onStart: () => logger.info({ event: "polling" }, "telegram long polling started"),
     });
   }
@@ -88,6 +100,7 @@ async function main(): Promise<void> {
     const timer = setInterval(() => {
       void processDueReminders(deps, {
         workerId: `poll-${process.pid}`,
+        source: "poll",
         send: sendReminder,
       }).catch((error: unknown) => {
         logger.error({ event: "reminder_poll_failed", message: error instanceof Error ? error.message : "error" }, "reminder poll failed");

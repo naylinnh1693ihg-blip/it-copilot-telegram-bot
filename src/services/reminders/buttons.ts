@@ -1,6 +1,7 @@
 import type { Deps } from "../../app/deps.js";
 import type { Reminder, User } from "../../types/models.js";
 import { formatWhen, toIso } from "../../utils/time.js";
+import { advanceOccurrence, nextOccurrenceAfter } from "./schedule.js";
 
 export const REMINDER_SNOOZE_MINUTES = 60;
 
@@ -49,9 +50,11 @@ export async function applyReminderButton(
   if (action === "done") {
     if (reminder.kind !== "once") {
       if (reminder.snoozedNextRunAt) {
+        // Cancel the pending snooze and go back to the regular schedule.
+        const nextRunAt = regularNextRun(reminder, toIso(now)) ?? reminder.snoozedNextRunAt;
         await save(deps, {
           ...reminder,
-          nextRunAt: reminder.snoozedNextRunAt,
+          nextRunAt,
           attemptOccurrenceAt: null,
           snoozedNextRunAt: null,
           lockedUntil: null,
@@ -72,10 +75,10 @@ export async function applyReminderButton(
     ...reminder,
     status: "active",
     nextRunAt: snoozeAt,
-    attemptOccurrenceAt: reminder.kind === "once" ? null : snoozeAt,
-    snoozedNextRunAt: reminder.kind === "once"
-      ? null
-      : reminder.snoozedNextRunAt ?? reminder.nextRunAt,
+    // The snoozed copy is a new delivery; any retry of an earlier send is dropped.
+    attemptOccurrenceAt: null,
+    // Remember the regular run the snooze replaces, so the worker can go back to it afterwards.
+    snoozedNextRunAt: reminder.kind === "once" ? null : regularNextRun(reminder, toIso(now)),
     lockedUntil: null,
     lockToken: null,
     lastError: null,
@@ -85,6 +88,21 @@ export async function applyReminderButton(
   const when = formatWhen(saved.nextRunAt, user.timezone || reminder.timezone);
   const text = `Snoozed reminder ${saved.reminderNumber} until ${when}.`;
   return { toast: "Snoozed 1 hour", editText: `${reminderText(reminder)}\n\nSnoozed until ${when}.`, text };
+}
+
+/**
+ * The next regular (unsnoozed) run of a recurring reminder after `nowIso`.
+ * While a send is being retried, `nextRunAt` holds the retry time, so the schedule is
+ * worked out from the occurrence being retried instead.
+ */
+function regularNextRun(reminder: Reminder, nowIso: string): string | null {
+  const base =
+    reminder.snoozedNextRunAt
+    ?? (reminder.attemptOccurrenceAt
+      ? advanceOccurrence(reminder.kind, reminder.attemptOccurrenceAt, reminder.timezone, reminder.intervalMinutes)
+      : reminder.nextRunAt);
+  if (!base) return null;
+  return nextOccurrenceAfter(reminder.kind, base, reminder.timezone, reminder.intervalMinutes, nowIso);
 }
 
 function reminderText(reminder: Reminder): string {

@@ -18,7 +18,13 @@ export interface KnowledgeMatch {
   metadata: ChunkMetadata;
 }
 
-/** Embed the question, search chunks, and return ranked matches. An empty list means nothing useful was found. */
+/**
+ * Embed the question, search chunks, and return ranked matches. An empty list means nothing useful was found.
+ *
+ * TODO(team-sharing): search is scoped to `userId`, so each team member sees only their own
+ * notes, knowledge and documents. Sharing knowledge team-wide is an open decision for the
+ * owner (see README "Team use" → "Open decision"). Do not widen this scope until it is made.
+ */
 export async function hybridSearch(deps: Deps, userId: string, question: string, matchCount?: number): Promise<KnowledgeMatch[]> {
   const config = ragConfig(deps.env);
   const limit = clampCount(matchCount ?? config.topK);

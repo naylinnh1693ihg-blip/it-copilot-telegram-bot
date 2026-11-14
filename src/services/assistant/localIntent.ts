@@ -159,6 +159,15 @@ export function parseLocalIntent(input: string): Intent | null {
   }
   const deleteNote = plain.match(/^delete note\s+#?(\d+)$/i);
   if (deleteNote?.[1]) return blankIntent({ intent: "delete_note", entity_number: Number(deleteNote[1]) });
+  const deleteDocument = plain.match(/^(?:delete|remove)\s+(?:the\s+)?(?:document|doc|file)\s+#?(\d+)$/i);
+  if (deleteDocument?.[1]) return blankIntent({ intent: "delete_document", entity_number: Number(deleteDocument[1]) });
+  const deleteEquipment = plain.match(/^(?:delete|remove)\s+(?:the\s+)?equipment(?:\s+card)?\s+(.+)$/i);
+  if (deleteEquipment?.[1]) {
+    const target = deleteEquipment[1].trim().replace(/^#/, "");
+    return /^\d+$/.test(target)
+      ? blankIntent({ intent: "delete_equipment", entity_number: Number(target) })
+      : blankIntent({ intent: "delete_equipment", search_query: target });
+  }
 
   const saved = plain.match(/^what information did i save about\s+(.+)$/i);
   if (saved?.[1]) return blankIntent({ intent: "search_notes", search_query: saved[1].trim() });

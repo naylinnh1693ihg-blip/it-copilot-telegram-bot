@@ -19,7 +19,7 @@ export async function analyzeStoredDocument(
   document: DocumentRecord,
   extraction: Extraction | null,
   onPreview?: (plainText: string) => Promise<void>,
-): Promise<{ text: string; parseMode?: "MarkdownV2" }> {
+): Promise<{ text: string; parseMode?: "MarkdownV2"; richMarkdown?: string }> {
   const extracted = extraction?.text ?? "";
   const mode = deps.env.VISION_MODE;
   const image = document.mimeType.startsWith("image/");
@@ -59,8 +59,8 @@ async function finishAnalysis(
   user: User,
   document: DocumentRecord,
   extracted: string,
-  summary: { text: string; parseMode: "MarkdownV2"; notes: string[]; summary: string },
-): Promise<{ text: string; parseMode: "MarkdownV2" }> {
+  summary: { text: string; parseMode: "MarkdownV2"; richMarkdown?: string; notes: string[]; summary: string },
+): Promise<{ text: string; parseMode: "MarkdownV2"; richMarkdown?: string }> {
   const notes = summary.notes.map((note) => `- ${note}`).join("\n");
   const indexing = indexSavedText(deps, {
     userId: user.id,
@@ -79,7 +79,7 @@ async function finishAnalysis(
   });
   if (deps.env.NODE_ENV === "test") await finished;
   else void finished;
-  return { text: summary.text, parseMode: summary.parseMode };
+  return { text: summary.text, parseMode: summary.parseMode, ...(summary.richMarkdown ? { richMarkdown: summary.richMarkdown } : {}) };
 }
 
 async function prepareVisionImages(deps: Deps, document: DocumentRecord): Promise<{ images: VisionImage[]; note: string }> {

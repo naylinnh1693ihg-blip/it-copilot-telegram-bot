@@ -9,6 +9,9 @@ import { buildRagMessages } from "./prompt.js";
 import { hybridSearch } from "./search.js";
 import { MemoryService } from "../memory/service.js";
 import { redactString } from "../../utils/text.js";
+import { isGenerationStopped } from "../../utils/errors.js";
+import { currentAbortSignal } from "../grok/abort.js";
+import { copyButtonsFor, groundedCopyButtons } from "../assistant/copyButtons.js";
 
 const QUESTION = /^(?:what|where|who|when|why|how|which|whose|is|are|do|does|did|can|could|should|tell me|explain)\b/i;
 
@@ -45,7 +48,8 @@ export async function answerWithRag(
     deps.logger.info({ event: "rag_retrieval", chunks: built.chunks }, "retrieved knowledge chunks");
     const sourcesLine = [built.relevant ? built.sourcesLine : "", memorySources(memories.numbers)].filter(Boolean).join("\n");
     const grounded = [memories.text, built.relevant ? built.context : ""].filter(Boolean).join("\n");
-    if (!deps.llm) return { text: withSources(grounded, sourcesLine) };
+    const context = built.relevant ? built.context : "";
+    if (!deps.llm) return withButtons({ text: withSources(grounded, sourcesLine) }, copyButtonsFor(context));
 
     const prompt = buildRagMessages(question, built.relevant ? built.context : "", { sourcesLine, memories: memories.text });
     const [systemMessage, userMessage] = prompt.messages;
@@ -56,8 +60,9 @@ export async function answerWithRag(
           system,
           user: userText,
           minIntervalMs: deps.env.TELEGRAM_EDIT_INTERVAL_MS,
+          signal: currentAbortSignal(),
         })
-      : await deps.llm.completeText({ system, user: userText });
+      : await deps.llm.completeText({ system, user: userText, signal: currentAbortSignal() });
     await deps.db.recordUsage({
       userId: user.id,
       model: deps.env.XAI_MODEL,
@@ -72,13 +77,16 @@ export async function answerWithRag(
 
     const answer = result.text.trim();
     if (!answer || /^(?:i\s+(?:don't|do not)\s+know(?:\s+that)?|(?:there\s+is\s+)?no\s+information(?:\s+available)?|(?:this\s+is\s+)?not\s+in\s+the\s+(?:retrieved\s+)?records|not\s+in\s+the\s+knowledge\s+base)[.!]?$/i.test(answer)) {
-      return { text: "I don't know that from your notes and documents." };
+      return { text: "I don't know that from your notes and documents.", lookup: true };
     }
     if (introducedNetworkFacts(grounded, answer).length > 0) {
-      return { text: "I don't know that from your notes and documents." };
+      return { text: "I don't know that from your notes and documents.", lookup: true };
     }
-    return { text: withSources(answer, sourcesLine) };
+    // Only identifiers that are in both the answer and the retrieved records.
+    return withButtons({ text: withSources(answer, sourcesLine) }, groundedCopyButtons(answer, context));
   } catch (error) {
+    // A stop must not fall back to another Grok call.
+    if (isGenerationStopped(error)) throw error;
     deps.logger.warn(
       { event: "rag_answer_failed", message: redactString(error instanceof Error ? error.message : "rag failed") },
       "falling back from RAG",
@@ -94,6 +102,11 @@ function memorySources(numbers: number[]): string {
   if (numbers.length === 0) return "";
   if (numbers.length === 1) return `From memory #${numbers[0]}`;
   return `From memory #${numbers.slice(0, -1).join(", #")} and memory #${numbers[numbers.length - 1]}`;
+}
+
+/** A RAG answer is a lookup of the asker's own records. */
+function withButtons(reply: Reply, copyButtons: Reply["copyButtons"] = []): Reply {
+  return { ...reply, lookup: true, ...(copyButtons.length > 0 ? { copyButtons } : {}) };
 }
 
 function withSources(answer: string, sourcesLine: string): string {

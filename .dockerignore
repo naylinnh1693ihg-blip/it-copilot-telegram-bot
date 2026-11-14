@@ -1,0 +1,12 @@
+node_modules
+dist
+coverage
+.git
+.env
+.env.*
+!.env.example
+.env.monitoring
+.config
+.local-backups
+monitoring/data
+*.log
