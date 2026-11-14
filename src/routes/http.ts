@@ -1,5 +1,4 @@
 import express, { type RequestHandler } from "express";
-import { collectDefaultMetrics, Counter, Histogram, Registry } from "@prometheus-io/client";
 import type { Deps } from "../app/deps.js";
 import { adminAppEnabled } from "../config/env.js";
 import { processDueReminders } from "../jobs/processReminders.js";
@@ -16,52 +15,10 @@ export function createHttpApp(
   } = {},
 ): express.Express {
   const app = express();
-  const metrics = new Registry();
-  collectDefaultMetrics({ register: metrics, prefix: "it_work_" });
-  const requests = new Counter({
-    name: "it_work_http_requests_total",
-    help: "Total HTTP requests served by the application.",
-    labelNames: ["method", "route", "status"] as const,
-    registers: [metrics],
-  });
-  const errors = new Counter({
-    name: "it_work_http_errors_total",
-    help: "Total HTTP responses with a 5xx status.",
-    labelNames: ["method", "route", "status"] as const,
-    registers: [metrics],
-  });
-  const duration = new Histogram({
-    name: "it_work_http_request_duration_seconds",
-    help: "HTTP request duration in seconds.",
-    labelNames: ["method", "route"] as const,
-    buckets: [0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10],
-    registers: [metrics],
-  });
   app.set("trust proxy", 1);
   app.disable("x-powered-by");
-  app.use((req, res, next) => {
-    const startedAt = process.hrtime.bigint();
-    res.on("finish", () => {
-      if (req.path === "/metrics") return;
-      const matchedRoute = req.route?.path;
-      const route = typeof matchedRoute === "string" ? `${req.baseUrl}${matchedRoute}` : "unmatched";
-      const status = String(res.statusCode);
-      requests.inc({ method: req.method, route, status });
-      duration.observe(
-        { method: req.method, route },
-        Number(process.hrtime.bigint() - startedAt) / 1_000_000_000,
-      );
-      if (res.statusCode >= 500) errors.inc({ method: req.method, route, status });
-    });
-    next();
-  });
   app.use(express.json({ limit: "1mb" }));
   const limiter = createRateLimiter(120, 60_000);
-
-  app.get("/metrics", async (_req, res) => {
-    res.set("Content-Type", metrics.contentType);
-    res.status(200).send(await metrics.metrics());
-  });
 
   app.get("/health", (_req, res) => {
     res.status(200).json({ ok: true, service: "it-work-copilot" });
