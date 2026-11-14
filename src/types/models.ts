@@ -132,6 +132,10 @@ export interface Equipment {
   location: string;
   ipAddress: string;
   notes: string;
+  /** Empty when unknown. /sec needs vendor, model, and firmware to match advisories. */
+  vendor: string;
+  model: string;
+  firmwareVersion: string;
   sourceNoteId: string | null;
   sourceDocumentId: string | null;
   createdAt: string;

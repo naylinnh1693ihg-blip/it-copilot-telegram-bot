@@ -26,8 +26,12 @@ const LIST = /^(?:please\s+)?(?:list|show)(?:\s+all)?(?:\s+my)?\s+(equipment|pri
 const SHOW_IP = /^(?:please\s+)?what(?:'s|s| is) the ip(?: address)? of\s+(.+?)\??$/i;
 const SHOW = /^(?:please\s+)?show equipment\s+(.+)$/i;
 const EXTRACT = /^(?:please\s+)?extract equipment from (note|document)\s+#?(\d+)$/i;
+const UPDATE = /^(?:please\s+)?(?:update|set)\s+equipment\s+(.+?)\s*:\s*([\s\S]+)$/i;
+const LABEL = /^(name|type|location|ip|notes|vendor|model|firmware(?:\s+version)?|version)\s*:\s*(.*)$/i;
+const UPDATE_FIELD = /^(vendor|model|firmware(?:\s+version)?|version|location|ip|notes)(?:\s*[:=]\s*|\s+)(.+)$/i;
 const IPV4 = /^(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
 const CREATE_EXAMPLE = "Add equipment: HP LaserJet, Floor 2, 192.168.1.10";
+const UPDATE_EXAMPLE = "Update equipment Main switch: vendor Cisco, model C9300-48P, firmware 17.9.4";
 
 const ExtractedEquipmentSchema = z.object({
   items: z
@@ -38,6 +42,9 @@ const ExtractedEquipmentSchema = z.object({
         location: z.string().max(200),
         ip: z.string().max(45),
         notes: z.string().max(2000),
+        vendor: z.string().max(100).optional().default(""),
+        model: z.string().max(100).optional().default(""),
+        firmware: z.string().max(100).optional().default(""),
       }),
     )
     .max(15),
@@ -54,21 +61,34 @@ export const EQUIPMENT_JSON_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["name", "type", "location", "ip", "notes"],
+        required: ["name", "type", "location", "ip", "notes", "vendor", "model", "firmware"],
         properties: {
           name: { type: "string" },
           type: { type: "string", enum: ["printer", "switch", "access_point", "other"] },
           location: { type: "string" },
           ip: { type: "string" },
           notes: { type: "string" },
+          vendor: { type: "string" },
+          model: { type: "string" },
+          firmware: { type: "string" },
         },
       },
     },
   },
 } as const;
 
+export interface EquipmentUpdate {
+  vendor?: string;
+  model?: string;
+  firmware?: string;
+  location?: string;
+  ip?: string;
+  notes?: string;
+}
+
 export type EquipmentCommand =
-  | { action: "create"; name: string; kind: EquipmentKind; location: string; ip: string; notes: string }
+  | { action: "create"; name: string; kind: EquipmentKind; location: string; ip: string; notes: string; vendor: string; model: string; firmware: string }
+  | { action: "update"; query: string; changes: EquipmentUpdate }
   | { action: "clarify"; question: string }
   | { action: "list"; kind: EquipmentKind | "all" }
   | { action: "show"; query: string }
@@ -80,6 +100,9 @@ interface Draft {
   location: string;
   ip: string;
   notes: string;
+  vendor: string;
+  model: string;
+  firmware: string;
 }
 
 /** Clear equipment commands. Returns null when the message is about something else. */
@@ -90,6 +113,9 @@ export function parseEquipmentCommand(text: string): EquipmentCommand | null {
     const source = extract[1].toLowerCase() === "document" ? "document" : "note";
     return { action: "extract", source, number: Number(extract[2]) };
   }
+
+  const update = normalized.match(UPDATE);
+  if (update?.[1] && update[2]) return parseUpdateBody(update[1].trim(), update[2]);
 
   const list = normalized.match(LIST);
   if (list?.[1]) return { action: "list", kind: listKind(list[1]) };
@@ -113,6 +139,9 @@ export function formatEquipmentCard(item: Equipment, source: string | null): str
     `Location: ${item.location}`,
     `IP: ${item.ipAddress}`,
   ];
+  if (item.vendor) lines.push(`Vendor: ${item.vendor}`);
+  if (item.model) lines.push(`Model: ${item.model}`);
+  if (item.firmwareVersion) lines.push(`Firmware: ${item.firmwareVersion}`);
   if (item.notes) lines.push(`Notes: ${item.notes}`);
   if (source) lines.push(`Source: ${source}`);
   return lines.join("\n");
@@ -134,6 +163,7 @@ export async function handleEquipment(deps: Deps, user: User, command: Equipment
   if (command.action === "clarify") return { text: command.question };
   if (command.action === "list") return listEquipment(deps, user, command.kind);
   if (command.action === "show") return showEquipment(deps, user, command.query);
+  if (command.action === "update") return updateEquipment(deps, user, command.query, command.changes);
   return saveDraft(deps, user, command, null, null);
 }
 
@@ -157,16 +187,86 @@ function parseCreateBody(body: string, fallback: EquipmentKind): EquipmentComman
   if (!parsed.location) {
     return { action: "clarify", question: `I need a location. Example: ${CREATE_EXAMPLE}` };
   }
-  const risk = secretRisk(`${parsed.name}\n${parsed.location}\n${parsed.notes}`);
+  const risk = secretRisk(draftText(parsed));
   if (risk) return { action: "clarify", question: `I didn't save that. It looks like a ${risk}.` };
   return { action: "create", ...parsed, kind: inferKind(parsed.name, parsed.kind), ip: parsed.ip };
+}
+
+function draftText(draft: Pick<Draft, "name" | "location" | "notes" | "vendor" | "model" | "firmware">): string {
+  return [draft.name, draft.location, draft.notes, draft.vendor, draft.model, draft.firmware].join("\n");
+}
+
+function labelKey(label: string): keyof EquipmentUpdate | "name" | "type" {
+  const key = label.toLowerCase().replace(/\s+/g, " ");
+  if (key === "firmware" || key === "firmware version" || key === "version") return "firmware";
+  return key as keyof EquipmentUpdate | "name" | "type";
+}
+
+function parseUpdateBody(query: string, body: string): EquipmentCommand {
+  const changes: EquipmentUpdate = {};
+  for (const part of body.split(/[\n,]/).map((piece) => piece.trim()).filter(Boolean)) {
+    const match = part.match(UPDATE_FIELD);
+    if (!match?.[1] || !match[2]) {
+      return { action: "clarify", question: `I couldn't read "${part}". Example: ${UPDATE_EXAMPLE}` };
+    }
+    const key = labelKey(match[1]);
+    if (key === "name" || key === "type") continue;
+    changes[key] = clip(match[2], key === "notes" ? 2000 : key === "location" ? 200 : 100);
+  }
+  if (Object.keys(changes).length === 0) {
+    return { action: "clarify", question: `Tell me what to change. Example: ${UPDATE_EXAMPLE}` };
+  }
+  if (changes.ip !== undefined && !isIp(changes.ip)) {
+    return { action: "clarify", question: `${changes.ip} is not an IPv4 address. Nothing was changed.` };
+  }
+  const risk = secretRisk(Object.values(changes).join("\n"));
+  if (risk) return { action: "clarify", question: `I didn't save that. It looks like a ${risk}.` };
+  return { action: "update", query, changes };
+}
+
+async function updateEquipment(deps: Deps, user: User, query: string, changes: EquipmentUpdate): Promise<Reply> {
+  const all = await deps.db.listEquipment(user.id);
+  const exact = all.filter((item) => item.name.toLowerCase() === query.toLowerCase());
+  const cards = exact.length === 1 ? exact : all.filter((item) => matches(item, query));
+  if (cards.length === 0) return { text: `I don't have equipment matching "${query}". Nothing was changed.` };
+  if (cards.length > 1) {
+    const names = cards.map((item) => item.name).join(", ");
+    return { text: `"${query}" matches ${cards.length} cards (${names}). Use the exact name. Nothing was changed.` };
+  }
+  const [current] = cards;
+  if (!current) return { text: `I don't have equipment matching "${query}". Nothing was changed.` };
+  const now = toIso(deps.clock.now());
+  const saved = await deps.db.updateEquipment({
+    ...current,
+    vendor: changes.vendor ?? current.vendor,
+    model: changes.model ?? current.model,
+    firmwareVersion: changes.firmware ?? current.firmwareVersion,
+    location: changes.location ?? current.location,
+    ipAddress: changes.ip ?? current.ipAddress,
+    notes: changes.notes ?? current.notes,
+    updatedAt: now,
+  });
+  await deps.db.writeAudit({
+    userId: user.id,
+    action: "equipment.update",
+    entity: "equipment",
+    entityId: saved.id,
+    metadata: { equipmentNumber: saved.equipmentNumber, fields: Object.keys(changes).join(",") },
+    createdAt: now,
+  }).catch((error: unknown) => {
+    deps.logger.warn(
+      { event: "audit_failed", message: error instanceof Error ? error.message : "audit failed" },
+      "audit failed",
+    );
+  });
+  return { text: `Updated equipment.\n\n${formatEquipmentCard(saved, await sourceLabel(deps, user, saved))}` };
 }
 
 function fromLabels(body: string, fallback: EquipmentKind): Draft | null {
   const fields = new Map<string, string>();
   for (const line of body.split(/\n/)) {
-    const match = line.trim().match(/^(name|type|location|ip|notes)\s*:\s*(.*)$/i);
-    if (match?.[1] && match[2] != null) fields.set(match[1].toLowerCase(), match[2].trim());
+    const match = line.trim().match(LABEL);
+    if (match?.[1] && match[2] != null) fields.set(labelKey(match[1]), match[2].trim());
   }
   if (!fields.has("name") && !fields.has("ip")) return null;
   const kind = kindFromWord(fields.get("type") ?? "") ?? fallback;
@@ -176,11 +276,14 @@ function fromLabels(body: string, fallback: EquipmentKind): Draft | null {
     location: clip(fields.get("location") ?? "", 200),
     ip: fields.get("ip") ?? "",
     notes: clip(fields.get("notes") ?? "", 2000),
+    vendor: clip(fields.get("vendor") ?? "", 100),
+    model: clip(fields.get("model") ?? "", 100),
+    firmware: clip(fields.get("firmware") ?? "", 100),
   };
 }
 
 function fromLines(lines: string[], fallback: EquipmentKind): Draft | null {
-  if (lines.length < 3 || lines.some((line) => /^(name|type|location|ip|notes)\s*:/i.test(line))) return null;
+  if (lines.length < 3 || lines.some((line) => LABEL.test(line))) return null;
   const ip = lines.find((line) => isIp(line));
   if (!ip) return null;
   const rest = lines.filter((line) => line !== ip);
@@ -194,6 +297,9 @@ function fromLines(lines: string[], fallback: EquipmentKind): Draft | null {
     location: clip(details[1] ?? "", 200),
     ip,
     notes: clip(details.slice(2).join(" "), 2000),
+    vendor: "",
+    model: "",
+    firmware: "",
   };
 }
 
@@ -211,6 +317,9 @@ function fromCommas(body: string, fallback: EquipmentKind): Draft | null {
     location: clip(details[1] ?? "", 200),
     ip,
     notes: clip(details.slice(2).join(", "), 2000),
+    vendor: "",
+    model: "",
+    firmware: "",
   };
 }
 
@@ -230,6 +339,9 @@ async function saveDraft(
         location: draft.location,
         ipAddress: draft.ip,
         notes: draft.notes || existing.notes,
+        vendor: draft.vendor || existing.vendor,
+        model: draft.model || existing.model,
+        firmwareVersion: draft.firmware || existing.firmwareVersion,
         sourceNoteId: sourceNoteId ?? existing.sourceNoteId,
         sourceDocumentId: sourceDocumentId ?? existing.sourceDocumentId,
         updatedAt: now,
@@ -241,6 +353,9 @@ async function saveDraft(
         location: draft.location,
         ipAddress: draft.ip,
         notes: draft.notes,
+        vendor: draft.vendor,
+        model: draft.model,
+        firmwareVersion: draft.firmware,
         sourceNoteId,
         sourceDocumentId,
         createdAt: now,
@@ -297,6 +412,7 @@ async function extractEquipment(
       "Do not invent names, locations, or IP addresses.",
       "type is printer, switch, access_point, or other.",
       "location and notes are empty strings when the text does not say them.",
+      "vendor, model, and firmware are the manufacturer, model number, and firmware or OS version exactly as written. Use empty strings when the text does not state them. Never guess a version.",
     ].join(" "),
     user: wrapUntrusted(command.source, loaded.body),
     schemaName: "equipment_cards",
@@ -326,8 +442,11 @@ async function extractEquipment(
       location: item.location.trim(),
       ip: item.ip.trim(),
       notes: item.notes.trim(),
+      vendor: item.vendor.trim(),
+      model: item.model.trim(),
+      firmware: item.firmware.trim(),
     }))
-    .filter((item) => item.name && isIp(item.ip) && !secretRisk(`${item.name}\n${item.location}\n${item.notes}`));
+    .filter((item) => item.name && isIp(item.ip) && !secretRisk(draftText(item)));
   if (drafts.length === 0) return { text: "I couldn't find a device with a stated IP address in that text." };
   const replies: string[] = [];
   for (const draft of drafts) {
