@@ -198,6 +198,27 @@ describe("reminders", () => {
     expect(await db.listReminders(user.id)).toHaveLength(2);
   });
 
+  it("creates a reminder list that starts with an edit label", async () => {
+    const { deps, db } = testDeps();
+    const user = await owner(db);
+    const reply = await handleText(
+      deps,
+      user,
+      [
+        "Edit: Create reminders:",
+        "• Check printer toners level tomorrow at 9 AM",
+        "• Write Daily Report tomorrow at 4 PM",
+        "• Inform to Outlook is down tomorrow at 5 PM",
+      ].join("\n"),
+    );
+    expect(reply.text).toContain("Created 3 reminders:");
+    expect(reply.text).toContain("Check printer toners level — Sat 31 Oct 2026, 9:00 AM");
+    expect(reply.text).toContain("Write Daily Report — Sat 31 Oct 2026, 4:00 PM");
+    expect(reply.text).toContain("Inform to Outlook is down — Sat 31 Oct 2026, 5:00 PM");
+    expect(reply.text).not.toContain("couldn't read that reminder time");
+    expect(await db.listReminders(user.id)).toHaveLength(3);
+  });
+
   it("schedules every reminder it can and asks only for a missing time", async () => {
     const { deps, db } = testDeps();
     const user = await owner(db);
@@ -331,6 +352,138 @@ describe("reminders", () => {
       nextRunAt: scheduledNextRun,
       snoozedNextRunAt: null,
       attemptOccurrenceAt: null,
+    });
+  });
+
+  it("sends a missed recurring occurrence once and then moves to the next future time", async () => {
+    const { deps, db } = testDeps();
+    const user = await owner(db);
+    const { reminder } = await db.insertReminder({
+      userId: user.id,
+      title: "Backup",
+      message: "Check the server backup",
+      kind: "daily",
+      timezone: "Asia/Dubai",
+      nextRunAt: "2026-10-27T06:00:00.000Z",
+      weekdays: [],
+      intervalMinutes: null,
+      status: "active",
+      dedupeKey: "daily|backup|catchup|",
+      createdAt: NOW,
+    });
+    let sent = 0;
+    const send = async () => {
+      sent += 1;
+      return { messageId: sent };
+    };
+    await processDueReminders(deps, { workerId: "catchup-1", send });
+    await processDueReminders(deps, { workerId: "catchup-2", send });
+    expect(sent).toBe(1);
+    expect((await db.findReminderById(reminder.id))?.nextRunAt).toBe("2026-10-31T06:00:00.000Z");
+  });
+
+  it("does not resend an interval reminder right after a snooze that outlasts the interval", async () => {
+    const { deps, db } = testDeps();
+    const user = await owner(db);
+    const { reminder } = await db.insertReminder({
+      userId: user.id,
+      title: "Ping",
+      message: "Check the ticket queue",
+      kind: "interval",
+      timezone: "Asia/Dubai",
+      nextRunAt: "2026-10-30T06:00:00.000Z",
+      weekdays: [],
+      intervalMinutes: 30,
+      status: "active",
+      dedupeKey: "interval|ping|30|",
+      createdAt: NOW,
+    });
+    let sent = 0;
+    const send = async () => {
+      sent += 1;
+      return { messageId: sent };
+    };
+    await processDueReminders(deps, { workerId: "interval-1", send });
+    await applyReminderButton(deps, user, "snooze", reminder.id);
+    expect((await db.findReminderById(reminder.id))?.nextRunAt).toBe("2026-10-30T07:00:00.000Z");
+
+    deps.clock = fixedClock("2026-10-30T07:00:01.000Z", "Asia/Dubai");
+    await processDueReminders(deps, { workerId: "interval-2", send });
+    await processDueReminders(deps, { workerId: "interval-3", send });
+    expect(sent).toBe(2);
+    expect((await db.findReminderById(reminder.id))?.nextRunAt).toBe("2026-10-30T07:30:00.000Z");
+  });
+
+  it("keeps the regular time when a recurring reminder is snoozed during a retry", async () => {
+    const { deps, db } = testDeps();
+    const user = await owner(db);
+    const { reminder } = await db.insertReminder({
+      userId: user.id,
+      title: "Backup",
+      message: "Check the server backup",
+      kind: "daily",
+      timezone: "Asia/Dubai",
+      nextRunAt: "2026-10-30T06:00:00.000Z",
+      weekdays: [],
+      intervalMinutes: null,
+      status: "active",
+      dedupeKey: "daily|backup|retry-snooze|",
+      createdAt: NOW,
+    });
+    let sent = 0;
+    await processDueReminders(deps, {
+      workerId: "retry-1",
+      send: async () => {
+        throw new Error("Telegram is down");
+      },
+    });
+    const retrying = await db.findReminderById(reminder.id);
+    expect(retrying?.attemptOccurrenceAt).toBe("2026-10-30T06:00:00.000Z");
+    expect(retrying?.nextRunAt).not.toBe("2026-10-30T06:00:00.000Z");
+
+    await applyReminderButton(deps, user, "snooze", reminder.id);
+    expect((await db.findReminderById(reminder.id))?.snoozedNextRunAt).toBe("2026-10-31T06:00:00.000Z");
+
+    deps.clock = fixedClock("2026-10-30T07:00:01.000Z", "Asia/Dubai");
+    const send = async () => {
+      sent += 1;
+      return { messageId: sent };
+    };
+    await processDueReminders(deps, { workerId: "retry-2", send });
+    await processDueReminders(deps, { workerId: "retry-3", send });
+    expect(sent).toBe(1);
+    expect(await db.findReminderById(reminder.id)).toMatchObject({
+      status: "active",
+      nextRunAt: "2026-10-31T06:00:00.000Z",
+      snoozedNextRunAt: null,
+      attemptOccurrenceAt: null,
+    });
+  });
+
+  it("restores the regular schedule when Done is tapped after a snooze", async () => {
+    const { deps, db } = testDeps();
+    const user = await owner(db);
+    const { reminder } = await db.insertReminder({
+      userId: user.id,
+      title: "Ping",
+      message: "Check the ticket queue",
+      kind: "interval",
+      timezone: "Asia/Dubai",
+      nextRunAt: "2026-10-30T06:00:00.000Z",
+      weekdays: [],
+      intervalMinutes: 30,
+      status: "active",
+      dedupeKey: "interval|ping|done|",
+      createdAt: NOW,
+    });
+    await processDueReminders(deps, { workerId: "done-1", send: async () => ({ messageId: 1 }) });
+    await applyReminderButton(deps, user, "snooze", reminder.id);
+    deps.clock = fixedClock("2026-10-30T06:40:00.000Z", "Asia/Dubai");
+    await applyReminderButton(deps, user, "done", reminder.id);
+    expect(await db.findReminderById(reminder.id)).toMatchObject({
+      status: "active",
+      nextRunAt: "2026-10-30T07:00:00.000Z",
+      snoozedNextRunAt: null,
     });
   });
 });

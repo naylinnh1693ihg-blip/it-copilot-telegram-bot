@@ -8,6 +8,7 @@ import { wrapUntrusted } from "../../utils/security.js";
 import { cleanText, redactString, secretRisk } from "../../utils/text.js";
 import { formatWhen, toIso } from "../../utils/time.js";
 import type { Reply } from "./execute.js";
+import { reminderDelivery } from "../reminders/delivery.js";
 
 export interface ReminderDraft {
   title: string;
@@ -134,7 +135,7 @@ export function scheduleForReminder(item: ReminderDraft, now: DateTime): ParsedS
  * so a task list without times stays on the task path. One "Remind me tomorrow…" stays single.
  */
 export function extractLocalReminders(text: string): LocalReminderExtraction {
-  const trimmed = text.trim();
+  const trimmed = text.trim().replace(/^(?:edit(?:ed)?|update)\s*:\s*/i, "").trim();
   if (TASK_CUE.test(trimmed)) return { kind: "none" };
   if (parseLocalIntent(trimmed.replace(/\s+/g, " "))?.intent === "create_reminder") return { kind: "none" };
 
@@ -237,6 +238,7 @@ export async function createManyReminders(deps: Deps, user: User, reminders: Rem
           at: schedule.at,
           weekday: schedule.weekdays[0] ?? null,
         }),
+        ...reminderDelivery(schedule.kind),
         createdAt: toIso(now),
       });
       const line = `${item.title} — ${formatWhen(result.reminder.nextRunAt, zone)}`;

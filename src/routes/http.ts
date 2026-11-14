@@ -4,12 +4,21 @@ import { adminAppEnabled } from "../config/env.js";
 import { processDueReminders } from "../jobs/processReminders.js";
 import { createRateLimiter, secretsMatch } from "../utils/security.js";
 import { createAdminRouter } from "./admin/index.js";
+import { createMetrics } from "./metrics.js";
 import { redactString } from "../utils/text.js";
+
+/** Authenticated calls per minute per caller to POST /internal/reminders/process. */
+export const REMINDER_TRIGGER_LIMIT_PER_MINUTE = 120;
 
 export function createHttpApp(
   deps: Deps,
   options: {
-    sendTelegram?: (telegramUserId: number, text: string, buttons?: Array<{ label: string; data: string }>) => Promise<{ messageId: number }>;
+    sendTelegram?: (
+      chatId: number,
+      text: string,
+      buttons?: Array<{ label: string; data: string }>,
+      options?: { threadId?: number },
+    ) => Promise<{ messageId: number }>;
     webhook?: RequestHandler;
     adminStaticDir?: string;
   } = {},
@@ -19,10 +28,18 @@ export function createHttpApp(
   app.disable("x-powered-by");
   app.use(express.json({ limit: "1mb" }));
   const limiter = createRateLimiter(120, 60_000);
+  // The reminder trigger has its own limiter, so webhook traffic can never use up its
+  // budget. Supabase cron calls once a minute; 120 a minute per caller only stops a runaway
+  // caller that already holds CRON_SECRET (the secret is checked first).
+  const reminderLimiter = createRateLimiter(REMINDER_TRIGGER_LIMIT_PER_MINUTE, 60_000);
+  const metrics = createMetrics();
+  app.use(metrics.middleware);
 
   app.get("/health", (_req, res) => {
     res.status(200).json({ ok: true, service: "it-work-copilot" });
   });
+
+  app.get("/metrics", metrics.handler);
 
   app.get("/health/ready", async (_req, res) => {
     const ping = await deps.db.ping();
@@ -39,7 +56,7 @@ export function createHttpApp(
       res.status(401).json({ ok: false });
       return;
     }
-    if (!limiter.allow(req.ip ?? "local", Date.now())) {
+    if (!reminderLimiter.allow(req.ip ?? "local", Date.now())) {
       res.status(429).json({ ok: false });
       return;
     }
@@ -48,8 +65,9 @@ export function createHttpApp(
       return;
     }
     try {
-      const result = await processDueReminders(deps, { workerId: "http", send: options.sendTelegram });
-      res.status(200).json({ ok: true, ...result });
+      const result = await processDueReminders(deps, { workerId: "http", source: "http", send: options.sendTelegram });
+      // Counts only: never reminder text, user ids or anything from the request.
+      res.status(200).json({ ok: true, sent: result.sent, failed: result.failed, skipped: result.skipped });
     } catch (error) {
       deps.logger.error({ event: "reminder_job_failed", message: redactString(error instanceof Error ? error.message : "error") }, "reminder job failed");
       res.status(500).json({ ok: false });
