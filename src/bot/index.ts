@@ -16,6 +16,7 @@ import { tasksPhrase } from "./commands/arguments.js";
 import { buildStatus, createLiveAnalysis, currentUser, keepTyping, rememberUser, sendReply } from "./handlers/messages.js";
 import { applyReminderButton, parseReminderCallback } from "../services/reminders/buttons.js";
 import { issueLoginLink, LOGIN_TOKEN_MINUTES } from "../services/admin/auth.js";
+import { handleSecurityCommand } from "../services/security/specialist.js";
 
 function captionPlan(caption: string | undefined, filename: string): { title: string; summarize: boolean } {
   const text = caption?.trim() ?? "";
@@ -100,6 +101,10 @@ export function createBot(token: string, deps: Deps): Bot {
   bot.command("remember", (ctx) => runText(deps, ctx, `Remember that ${String(ctx.match).trim()}`));
   bot.command("memories", (ctx) => runText(deps, ctx, "list memories"));
   bot.command("forget", (ctx) => runText(deps, ctx, `forget ${String(ctx.match).trim()}`));
+  // /sec bypasses handleText on purpose: the request is never written to conversation history.
+  bot.command("sec", (ctx) =>
+    deliver(deps, ctx, (onAnalysisPreview) => handleSecurityCommand(deps, currentUser(ctx), String(ctx.match ?? ""), onAnalysisPreview)),
+  );
   bot.command("admin", async (ctx) => {
     const link = await issueLoginLink(deps, currentUser(ctx));
     if (!link.ok) {

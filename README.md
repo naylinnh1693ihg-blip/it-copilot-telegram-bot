@@ -85,7 +85,7 @@ The app calls the xAI Responses API with the official OpenAI JavaScript SDK poin
 3. Copy the **service role** key to `SUPABASE_SERVICE_ROLE_KEY`. This key bypasses Row Level Security. It must stay in `.env` on the server. Never send it to Telegram.
 4. Copy the anon key to `SUPABASE_ANON_KEY` for your records. This backend does not use the anon key to read data. The migration revokes anon and authenticated access.
 5. Open the SQL editor and run the files in `supabase/migrations` in filename order.
-   If you install the Supabase CLI later, `supabase db push` applies them. Trigram search answers identifier lookups from saved records. The equipment file adds equipment cards. The knowledge-chunks file adds pgvector embeddings for question answering. The chunk-type file marks narrative passages and short identifier passages. The chunk-search file returns the source id and chunk type with each match. The hybrid-search file publishes `hybrid_search_chunks` with a 1024-dimension vector. Leave `XAI_EMBEDDING_DIMENSIONS` at 1024. A 1536-dimension embedding will not fit that column.
+   If you install the Supabase CLI later, `supabase db push` applies them. Trigram search answers identifier lookups from saved records. The equipment file adds equipment cards, and the equipment security fields file adds vendor, model, and firmware for `/sec`. The knowledge-chunks file adds pgvector embeddings for question answering. The chunk-type file marks narrative passages and short identifier passages. The chunk-search file returns the source id and chunk type with each match. The hybrid-search file publishes `hybrid_search_chunks` with a 1024-dimension vector. Leave `XAI_EMBEDDING_DIMENSIONS` at 1024. A 1536-dimension embedding will not fit that column.
 6. Confirm the private Storage bucket `documents` exists under **Storage**. The migration creates it when the storage tables are present. If it does not, create a bucket named `documents` and leave **Public** off.
 
 The migrations create users, tasks, reminders, delivery logs, notes, knowledge entries, documents, extractions, Telegram update ids, preferences, audit logs, AI usage, equipment, and knowledge chunks. Exact terms use trigram search. Questions also use xAI embeddings when the chunks have vectors.
@@ -254,6 +254,35 @@ To work on the page with hot reload, keep `npm run dev` running and also start `
 4. Send `/admin` to the bot. The link uses `PUBLIC_BASE_URL`.
 
 If you change `ADMIN_SESSION_SECRET`, every open session and unused sign-in link stops working.
+
+## 13. Cybersecurity Specialist (`/sec`)
+
+Send `/sec` followed by a question, a config, a log, or an email:
+
+```
+/sec Is my main switch affected by CVE-2023-20198?
+/sec Review this FortiGate admin config: (paste it)
+/sec Analyze these Windows 4625 events: (paste them)
+/sec Check this email for phishing: (paste headers and body)
+/sec rules
+```
+
+Every answer uses the same sections: Finding, Severity, Affected assets, Evidence, Fix, Rollback, How to verify, then Change safety and Sources. The rules are in [docs/security-specialist-rules.md](docs/security-specialist-rules.md). The server enforces the main ones:
+
+- Each claim must cite NVD, CVE.org, the vendor's own advisory, CIS, NIST, MITRE ATT&CK, CISA KEV, or a standards body or UAE regulator. An answer with no citations, or with any other source, is rejected. Grok gets one retry. After that you get a message saying what failed instead of an unverified answer.
+- Passwords, keys, SNMP communities, and pre-shared keys are replaced with `[REDACTED]` before anything goes to xAI, and again on the reply. Nothing from `/sec` is written to conversation history, notes, or memories. The audit log keeps only the outcome and counts.
+- Every fix comes with a rollback step and the lab and change-window warning.
+- Requests for exploits, payloads, or malware are declined.
+
+`/sec` checks your saved equipment. It can only say a device is affected when the vendor, model, and firmware are recorded:
+
+```
+Update equipment Main switch: vendor Cisco, model C9300-48P, firmware 17.9.4
+```
+
+You can also add them when you create a card, one field per line: `Name:`, `Vendor:`, `Model:`, `Firmware:`, `Location:`, `IP:`.
+
+Each `/sec` request makes one Grok call with web search, or two when the first answer is rejected. Usage is recorded as `security_review`.
 
 ## Commands you will use
 

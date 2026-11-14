@@ -55,6 +55,12 @@ function textOrNull(row: Row, key: string): string | null {
   return text(row, key);
 }
 
+/** Empty string when the column is missing or null, so reads keep working while a migration is pending. */
+function optionalText(row: Row, key: string): string {
+  const value = row[key];
+  return typeof value === "string" ? value : "";
+}
+
 function real(row: Row, key: string): number {
   const value = row[key];
   const number = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
@@ -108,6 +114,9 @@ function equipmentFrom(row: Row): Equipment {
     location: text(row, "location"),
     ipAddress: text(row, "ip_address"),
     notes: text(row, "notes"),
+    vendor: optionalText(row, "vendor"),
+    model: optionalText(row, "model"),
+    firmwareVersion: optionalText(row, "firmware_version"),
     sourceNoteId: textOrNull(row, "source_note_id"),
     sourceDocumentId: textOrNull(row, "source_document_id"),
     createdAt: text(row, "created_at"),
@@ -1012,6 +1021,9 @@ export class SupabaseDatabase implements Database {
         location: input.location,
         ip_address: input.ipAddress,
         notes: input.notes,
+        vendor: input.vendor,
+        model: input.model,
+        firmware_version: input.firmwareVersion,
         source_note_id: input.sourceNoteId,
         source_document_id: input.sourceDocumentId,
         created_at: input.createdAt,
@@ -1033,6 +1045,9 @@ export class SupabaseDatabase implements Database {
         location: item.location,
         ip_address: item.ipAddress,
         notes: item.notes,
+        vendor: item.vendor,
+        model: item.model,
+        firmware_version: item.firmwareVersion,
         source_note_id: item.sourceNoteId,
         source_document_id: item.sourceDocumentId,
         updated_at: item.updatedAt,

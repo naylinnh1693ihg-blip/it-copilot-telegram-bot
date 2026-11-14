@@ -109,6 +109,9 @@ export interface NewEquipment {
   location: string;
   ipAddress: string;
   notes: string;
+  vendor: string;
+  model: string;
+  firmwareVersion: string;
   sourceNoteId: string | null;
   sourceDocumentId: string | null;
   createdAt: string;
