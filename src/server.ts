@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { missingRuntimeSettings, parseEnv } from "./config/env.js";
+import { adminAppEnabled, missingRuntimeSettings, parseEnv } from "./config/env.js";
 import { createSupabaseClient, SupabaseDatabase } from "./database/supabase.js";
 import { createSupabaseStorage } from "./services/documents/storage.js";
 import { createXaiClient } from "./services/grok/xai.js";
@@ -22,6 +22,12 @@ async function main(): Promise<void> {
   }
 
   const logger = createLogger(env.LOG_LEVEL);
+  if (env.ADMIN_ENABLED && !adminAppEnabled(env)) {
+    logger.warn(
+      { event: "admin_disabled" },
+      "ADMIN_ENABLED is true but ADMIN_SESSION_SECRET is missing or shorter than 32 characters. The admin app stays off until you set a long secret.",
+    );
+  }
   const client = createSupabaseClient(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
   const db = new SupabaseDatabase(client);
   const ping = await db.ping();

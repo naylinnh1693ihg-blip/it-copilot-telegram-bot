@@ -5,7 +5,7 @@ import { DateTime } from "luxon";
 import request from "supertest";
 import { describe, expect, it } from "vitest";
 import type { Deps } from "../src/app/deps.js";
-import { parseEnv, missingRuntimeSettings } from "../src/config/env.js";
+import { adminAppEnabled, parseEnv, missingRuntimeSettings } from "../src/config/env.js";
 import { createHttpApp } from "../src/routes/http.js";
 import { authenticate, issueLoginLink, redeemLoginToken } from "../src/services/admin/auth.js";
 import type { User } from "../src/types/models.js";
@@ -60,9 +60,12 @@ describe("admin app switch", () => {
     expect(parseEnv({ ADMIN_ENABLED: "yes" }).ADMIN_ENABLED).toBe(false);
     expect(parseEnv({ ADMIN_ENABLED: "TRUE" }).ADMIN_ENABLED).toBe(true);
     const short = parseEnv({ ADMIN_ENABLED: "true", ADMIN_SESSION_SECRET: "short" });
-    expect(missingRuntimeSettings(short).join(" ")).toContain("ADMIN_SESSION_SECRET");
+    expect(missingRuntimeSettings(short).join(" ")).not.toContain("ADMIN_SESSION_SECRET");
+    expect(adminAppEnabled(short)).toBe(false);
+    const ready = parseEnv({ ADMIN_ENABLED: "true", ADMIN_SESSION_SECRET: "a".repeat(32) });
+    expect(adminAppEnabled(ready)).toBe(true);
     const off = parseEnv({ ADMIN_ENABLED: "false" });
-    expect(missingRuntimeSettings(off).join(" ")).not.toContain("ADMIN_SESSION_SECRET");
+    expect(adminAppEnabled(off)).toBe(false);
   });
 
   it("does not issue a link while the admin app is off", async () => {

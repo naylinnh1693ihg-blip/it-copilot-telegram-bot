@@ -75,10 +75,12 @@ export function missingRuntimeSettings(env: Env): string[] {
       missing.push("TELEGRAM_WEBHOOK_SECRET (use 1-256 characters: letters, numbers, _ or -)");
     }
   }
-  if (env.ADMIN_ENABLED && env.ADMIN_SESSION_SECRET.length < 32) {
-    missing.push("ADMIN_SESSION_SECRET (at least 32 characters when ADMIN_ENABLED=true)");
-  }
   return missing;
+}
+
+/** True only when admin is requested and ADMIN_SESSION_SECRET is long enough. Misconfiguration must not block webhook startup. */
+export function adminAppEnabled(env: Env): boolean {
+  return env.ADMIN_ENABLED && env.ADMIN_SESSION_SECRET.length >= 32;
 }
 
 export const TELEGRAM_CLOUD_DOWNLOAD_LIMIT = 20 * 1024 * 1024;

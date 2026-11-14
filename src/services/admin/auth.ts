@@ -1,5 +1,6 @@
 import { createHmac, randomBytes } from "node:crypto";
 import type { Deps } from "../../app/deps.js";
+import { adminAppEnabled } from "../../config/env.js";
 import type { AdminSession, User, UserRole } from "../../types/models.js";
 import { secretsMatch } from "../../utils/security.js";
 import { toIso } from "../../utils/time.js";
@@ -42,7 +43,7 @@ export type LoginLinkResult = { ok: true; url: string; expiresAt: string } | { o
 
 /** Creates a single-use sign-in link. The token travels in the URL fragment, so it is not sent in requests or logs. */
 export async function issueLoginLink(deps: Deps, input: User): Promise<LoginLinkResult> {
-  if (!deps.env.ADMIN_ENABLED) return { ok: false, message: "The admin app is turned off." };
+  if (!adminAppEnabled(deps.env)) return { ok: false, message: "The admin app is turned off." };
   const user = await ensureOwnerRole(deps, input);
   if (!canUseAdmin(user)) return { ok: false, message: "This account can't open the admin app." };
   const token = randomToken();
