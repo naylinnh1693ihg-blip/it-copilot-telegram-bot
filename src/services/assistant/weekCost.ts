@@ -3,6 +3,7 @@ import type { Deps } from "../../app/deps.js";
 import type { UsageSlice } from "../../database/types.js";
 import type { User } from "../../types/models.js";
 import { costForUsage } from "../grok/prices.js";
+import { claudeCost } from "../llm/claudePrices.js";
 import { toIso } from "../../utils/time.js";
 
 /**
@@ -28,7 +29,9 @@ export function formatWeekCost(rows: UsageSlice[]): string {
     const current = grouped.get(row.model) ?? { inputTokens: 0, outputTokens: 0, costUsd: 0 };
     current.inputTokens += row.inputTokens;
     current.outputTokens += row.outputTokens;
-    const cost = costForUsage(row.model, row.inputTokens, row.outputTokens);
+    const cost =
+      costForUsage(row.model, row.inputTokens, row.outputTokens) ??
+      claudeCost(row.model, row.inputTokens, row.outputTokens);
     current.costUsd = cost === null || current.costUsd === null ? null : current.costUsd + cost;
     grouped.set(row.model, current);
   }

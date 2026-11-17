@@ -3,6 +3,7 @@ import type { User } from "../../types/models.js";
 import type { Reply } from "../assistant/execute.js";
 import { introducedNetworkFacts } from "../../utils/security.js";
 import { toIso } from "../../utils/time.js";
+import { usageUsd } from "../llm/usage.js";
 import { buildRagContext } from "./context.js";
 import { ragConfig } from "./config.js";
 import { buildRagMessages } from "./prompt.js";
@@ -60,13 +61,11 @@ export async function answerWithRag(
       : await deps.llm.completeText({ system, user: userText });
     await deps.db.recordUsage({
       userId: user.id,
-      model: deps.env.XAI_MODEL,
+      model: result.model ?? deps.env.XAI_MODEL,
       purpose: "rag",
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
-      estimatedUsd:
-        (result.inputTokens / 1_000_000) * deps.env.XAI_INPUT_USD_PER_MILLION +
-        (result.outputTokens / 1_000_000) * deps.env.XAI_OUTPUT_USD_PER_MILLION,
+      estimatedUsd: usageUsd(result, deps.env),
       createdAt: toIso(deps.clock.now()),
     }).catch(() => undefined);
 

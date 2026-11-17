@@ -5,6 +5,7 @@ import { intentPrompt } from "../grok/prompts.js";
 import { AppError, GrokError, toUserMessage } from "../../utils/errors.js";
 import { redactString } from "../../utils/text.js";
 import { toIso } from "../../utils/time.js";
+import { usageUsd } from "../llm/usage.js";
 import { runGrokAgent, toolsForMessage } from "./agent.js";
 import { execute, type Reply } from "./execute.js";
 import { isConfidentLocalIntent, parseLocalIntent } from "./localIntent.js";
@@ -56,13 +57,11 @@ async function interpret(
     });
     await deps.db.recordUsage({
       userId: user.id,
-      model: deps.env.XAI_MODEL,
+      model: result.model ?? deps.env.XAI_MODEL,
       purpose: "intent",
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
-      estimatedUsd:
-        (result.inputTokens / 1_000_000) * deps.env.XAI_INPUT_USD_PER_MILLION +
-        (result.outputTokens / 1_000_000) * deps.env.XAI_OUTPUT_USD_PER_MILLION,
+      estimatedUsd: usageUsd(result, deps.env),
       createdAt: toIso(deps.clock.now()),
     }).catch(() => undefined);
     const parsed = IntentSchema.safeParse(JSON.parse(result.text));

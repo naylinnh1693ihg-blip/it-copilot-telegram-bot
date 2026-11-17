@@ -2,7 +2,7 @@ import "dotenv/config";
 import { missingRuntimeSettings, parseEnv } from "./config/env.js";
 import { createSupabaseClient, SupabaseDatabase } from "./database/supabase.js";
 import { createSupabaseStorage } from "./services/documents/storage.js";
-import { createXaiClient } from "./services/grok/xai.js";
+import { createLlmClient } from "./services/llm/factory.js";
 import { createBot, telegramWebhook } from "./bot/index.js";
 import { inlineButtons } from "./bot/keyboards/menus.js";
 import { createHttpApp } from "./routes/http.js";
@@ -35,14 +35,7 @@ async function main(): Promise<void> {
     db,
     clock: zoneClock(env.APP_TIMEZONE),
     logger,
-    llm: env.XAI_API_KEY
-      ? createXaiClient({
-          apiKey: env.XAI_API_KEY,
-          baseUrl: env.XAI_BASE_URL,
-          model: env.XAI_MODEL,
-          timeoutMs: env.XAI_TIMEOUT_MS,
-        })
-      : null,
+    llm: createLlmClient(env, logger),
     storage: createSupabaseStorage(client),
   };
 

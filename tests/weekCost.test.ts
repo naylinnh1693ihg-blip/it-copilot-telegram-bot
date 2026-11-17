@@ -2,6 +2,7 @@ import { DateTime } from "luxon";
 import { describe, expect, it } from "vitest";
 import type { LlmClient } from "../src/services/grok/client.js";
 import { handleText } from "../src/services/assistant/handleText.js";
+import { formatWeekCost } from "../src/services/assistant/weekCost.js";
 import { parseLocalIntent } from "../src/services/assistant/localIntent.js";
 import { toIso } from "../src/utils/time.js";
 import { NOW, owner, testDeps } from "./helpers.js";
@@ -103,6 +104,17 @@ describe("week cost", () => {
     const unknown = await handleText(deps, user, "Usage cost this week");
     expect(unknown.text).toContain("Total: price unknown");
     expect(unknown.text).toContain("custom-model: price unknown (500 in / 20 out)");
+  });
+
+  it("prices Claude models next to Grok instead of marking them unknown", () => {
+    const text = formatWeekCost([
+      { model: "claude-sonnet-5-5", inputTokens: 1_000_000, outputTokens: 100_000 },
+      { model: "grok-4.7", inputTokens: 1_000_000, outputTokens: 0 },
+    ]);
+    expect(text).toContain("claude-sonnet-5-5: $3.00");
+    expect(text).toContain("grok-4.7: $2.00");
+    expect(text).toContain("Total: $5.00");
+    expect(text.includes("price unknown")).toBe(false);
   });
 
   it("uses Monday-to-Monday in the user timezone", async () => {

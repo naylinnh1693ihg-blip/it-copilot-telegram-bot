@@ -13,7 +13,12 @@ export class DatabaseError extends Error {
 }
 
 export class GrokError extends Error {
-  constructor(message: string, public readonly retryable: boolean, public readonly status = 0) {
+  constructor(
+    message: string,
+    public readonly retryable: boolean,
+    public readonly status = 0,
+    public readonly provider: "xai" | "claude" = "xai",
+  ) {
     super(message);
     this.name = "GrokError";
   }
@@ -22,6 +27,9 @@ export class GrokError extends Error {
 export function toUserMessage(error: unknown): string {
   if (error instanceof AppError) return error.userMessage;
   if (error instanceof GrokError) {
+    if (error.provider === "claude") {
+      return "I couldn't get a response from Claude. Check ANTHROPIC_API_KEY and the account's credit balance, then try again.";
+    }
     if (error.status === 402) {
       return "Grok reports that the account needs credits or an active subscription. Check account usage at https://grok.com/?_s=usage, then try again.";
     }

@@ -255,6 +255,17 @@ To work on the page with hot reload, keep `npm run dev` running and also start `
 
 If you change `ADMIN_SESSION_SECRET`, every open session and unused sign-in link stops working.
 
+## 13. Claude as a second model (optional)
+
+The bot can use Claude next to Grok. It is off until you set `ANTHROPIC_API_KEY`, and even then nothing moves until you choose tasks.
+
+1. Create an API key in the Anthropic Console and set a monthly spend limit there. A Claude or Cursor subscription does not include API credit.
+2. In the service's **Environment** settings, set `ANTHROPIC_API_KEY`. `render.yaml` does not list it, so add it by hand.
+3. Set `LLM_CLAUDE_TASKS` to the work Claude should take first, from `extract` (intent, tasks, reminders, equipment), `answer` (knowledge answers) and `document` (document analysis). Start with `extract` and compare results before adding more.
+4. Optional: `LLM_FALLBACK=true` retries a failed call once on the other provider. That sends the request to a second vendor, so it is off by default.
+
+Web search, tool calls and embeddings always stay on xAI, so `XAI_API_KEY` is still required. Usage rows record the model that answered, and the weekly cost reply lists Grok and Claude models separately.
+
 ## Commands you will use
 
 ```bash

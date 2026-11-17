@@ -6,6 +6,7 @@ import { wrapUntrusted } from "../../utils/security.js";
 import { analysisModelConfig, chooseAnalysisModel } from "./analysisModel.js";
 import type { VisionImage } from "./vision.js";
 import { toIso } from "../../utils/time.js";
+import { usageUsd } from "../llm/usage.js";
 
 const MAX_GROK_INPUT = 12_000;
 const MAX_TELEGRAM_REPLY = 3_500;
@@ -238,13 +239,11 @@ export async function summarizeDocument(
 
   await deps.db.recordUsage({
     userId: user.id,
-    model: images.length ? visionModel : choice.model,
+    model: result.model ?? (images.length ? visionModel : choice.model),
     purpose: images.length ? "document_vision" : "document_analysis",
     inputTokens: result.inputTokens,
     outputTokens: result.outputTokens,
-    estimatedUsd:
-      (result.inputTokens / 1_000_000) * deps.env.XAI_INPUT_USD_PER_MILLION +
-      (result.outputTokens / 1_000_000) * deps.env.XAI_OUTPUT_USD_PER_MILLION,
+    estimatedUsd: usageUsd(result, deps.env),
     createdAt: toIso(deps.clock.now()),
   }).catch(() => undefined);
 

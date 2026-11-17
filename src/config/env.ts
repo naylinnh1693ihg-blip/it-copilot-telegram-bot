@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { CLAUDE_TASKS, type ClaudeTask } from "../services/llm/tasks.js";
 
 const schema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().default(""),
@@ -33,6 +34,38 @@ const schema = z.object({
   XAI_LONG_CONTEXT_TIMEOUT_MS: z.coerce.number().int().min(45_000).max(120_000).default(90_000),
   XAI_INPUT_USD_PER_MILLION: z.coerce.number().nonnegative().default(2),
   XAI_OUTPUT_USD_PER_MILLION: z.coerce.number().nonnegative().default(6),
+  /** Optional second provider. Empty leaves the bot on xAI only. */
+  ANTHROPIC_API_KEY: z.string().default(""),
+  ANTHROPIC_BASE_URL: z.string().url().default("https://api.anthropic.com"),
+  /** Used for answers and document analysis. */
+  ANTHROPIC_MODEL: z.string().min(1).default("claude-sonnet-5-5"),
+  /** Used for short structured extraction. */
+  ANTHROPIC_MODEL_FAST: z.string().min(1).default("claude-haiku-5-5"),
+  ANTHROPIC_TIMEOUT_MS: z.coerce.number().int().positive().default(60_000),
+  ANTHROPIC_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(64_000).default(8_192),
+  /** Requests estimated above this many input tokens (characters / 4) stay on xAI. */
+  ANTHROPIC_MAX_INPUT_TOKENS: z.coerce.number().int().positive().default(500_000),
+  /** Comma list from extract, answer, document. Empty sends nothing to Claude. */
+  LLM_CLAUDE_TASKS: z
+    .string()
+    .default("")
+    .transform((value, ctx): ClaudeTask[] => {
+      const items = value
+        .split(",")
+        .map((item) => item.trim().toLowerCase())
+        .filter(Boolean);
+      const unknown = items.filter((item) => !(CLAUDE_TASKS as readonly string[]).includes(item));
+      if (unknown.length > 0) {
+        ctx.addIssue({ code: "custom", message: `unknown task ${unknown.join(", ")}. Use ${CLAUDE_TASKS.join(", ")}` });
+        return z.NEVER;
+      }
+      return [...new Set(items)] as ClaudeTask[];
+    }),
+  /** When "true", a failed call on a task Claude can handle is retried once on the other provider. */
+  LLM_FALLBACK: z
+    .string()
+    .default("false")
+    .transform((value) => value.trim().toLowerCase() === "true"),
   SUPABASE_URL: z.string().default(""),
   SUPABASE_ANON_KEY: z.string().default(""),
   SUPABASE_SERVICE_ROLE_KEY: z.string().default(""),
@@ -74,6 +107,9 @@ export function missingRuntimeSettings(env: Env): string[] {
     if (env.TELEGRAM_WEBHOOK_SECRET && !/^[A-Za-z0-9_-]{1,256}$/.test(env.TELEGRAM_WEBHOOK_SECRET)) {
       missing.push("TELEGRAM_WEBHOOK_SECRET (use 1-256 characters: letters, numbers, _ or -)");
     }
+  }
+  if (!env.ANTHROPIC_API_KEY && (env.LLM_CLAUDE_TASKS.length > 0 || env.LLM_FALLBACK)) {
+    missing.push("ANTHROPIC_API_KEY (needed when LLM_CLAUDE_TASKS or LLM_FALLBACK is set)");
   }
   if (env.ADMIN_ENABLED && env.ADMIN_SESSION_SECRET.length < 32) {
     missing.push("ADMIN_SESSION_SECRET (at least 32 characters when ADMIN_ENABLED=true)");

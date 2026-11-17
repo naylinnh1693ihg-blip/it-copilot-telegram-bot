@@ -5,6 +5,10 @@ export interface LlmResult {
   text: string;
   inputTokens: number;
   outputTokens: number;
+  /** Set by providers other than the default xAI client. Usage rows record it instead of XAI_MODEL. */
+  model?: string;
+  /** Cost computed by that provider. Absent means the xAI rates from env apply. */
+  estimatedUsd?: number;
 }
 
 export interface LlmRequestPolicy {

@@ -12,6 +12,8 @@ import { parseSchedule, reminderDedupeKey } from "../reminders/schedule.js";
 import { introducedNetworkFacts, wrapUntrusted } from "../../utils/security.js";
 import { cleanText, disruptiveWarning, parseTags, redactString, secretRisk, snippet } from "../../utils/text.js";
 import { formatWhen, parseClock, toIso } from "../../utils/time.js";
+import { usageUsd } from "../llm/usage.js";
+import type { LlmResult } from "../grok/client.js";
 import { HELP_TEXT } from "./help.js";
 import { weekCostReply } from "./weekCost.js";
 import { searchDocumentContent } from "../rag/documentSearch.js";
@@ -102,18 +104,16 @@ async function recordUsage(
   deps: Deps,
   user: User,
   purpose: string,
-  result: { inputTokens: number; outputTokens: number },
+  result: LlmResult,
 ): Promise<void> {
   try {
     await deps.db.recordUsage({
       userId: user.id,
-      model: deps.env.XAI_MODEL,
+      model: result.model ?? deps.env.XAI_MODEL,
       purpose,
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
-      estimatedUsd:
-        (result.inputTokens / 1_000_000) * deps.env.XAI_INPUT_USD_PER_MILLION +
-        (result.outputTokens / 1_000_000) * deps.env.XAI_OUTPUT_USD_PER_MILLION,
+      estimatedUsd: usageUsd(result, deps.env),
       createdAt: toIso(deps.clock.now()),
     });
   } catch (error) {
