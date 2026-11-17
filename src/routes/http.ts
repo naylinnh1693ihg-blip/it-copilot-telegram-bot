@@ -5,7 +5,7 @@ import { adminAppEnabled } from "../config/env.js";
 import { processDueReminders } from "../jobs/processReminders.js";
 import { createRateLimiter, secretsMatch } from "../utils/security.js";
 import { createAdminRouter } from "./admin/index.js";
-import { sendFormDocument } from "./formPage.js";
+import { MINIAPP_CSP, renderHomeDocument, sendFormDocument } from "./formPage.js";
 import { createMiniAppApi } from "./forms.js";
 import { createMetrics } from "./metrics.js";
 import { redactString } from "../utils/text.js";
@@ -99,6 +99,13 @@ export function createHttpApp(
       options.sendTelegram ? (chatId, text) => options.sendTelegram!(chatId, text) : undefined,
     ),
   );
+  app.get("/miniapp", (_req, res) => {
+    res.setHeader("Content-Security-Policy", MINIAPP_CSP);
+    res.setHeader("Referrer-Policy", "no-referrer");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "no-store");
+    res.type("html").send(renderHomeDocument());
+  });
   app.get("/miniapp/:formId", (req, res) => {
     const formId = typeof req.params.formId === "string" ? req.params.formId : "";
     sendFormDocument(res, { formId, surface: "miniapp", apiBase: "/api" });

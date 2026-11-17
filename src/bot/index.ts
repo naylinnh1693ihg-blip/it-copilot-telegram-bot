@@ -321,6 +321,7 @@ export function createBot(token: string, deps: Deps): Bot {
   bot.command("memories", (ctx) => runText(deps, ctx, "list memories"));
   bot.command("forget", (ctx) => runText(deps, ctx, `forget ${String(ctx.match).trim()}`));
   bot.command("add", (ctx) => sendAddMenu(deps, ctx));
+  bot.command("birthdays", (ctx) => runText(deps, ctx, "birthdays"));
   bot.command("admin", async (ctx) => {
     // A one-time sign-in link must never be posted where other people can open it.
     if (ctx.chat.type !== "private") {

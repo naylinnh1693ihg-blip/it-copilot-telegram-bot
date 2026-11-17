@@ -331,7 +331,7 @@ The Mac must be logged in, awake, and running Docker Desktop for scheduled jobs.
 
 Equipment, contacts, and website links use one form. You can fill it in the admin site or in a Telegram Mini App. The bot does not ask for these fields one by one in chat.
 
-Send `/add` in a private chat, or tap **Add** in the menu. The bot replies with three buttons: Equipment, Contact, and Website link. Each opens `/miniapp/<form>`. After a successful save the Mini App closes and the bot confirms in chat, for example `Saved equipment #12: Dell Latitude 5440, Floor 2.`
+Send `/add` in a private chat, or tap **Add** in the menu. The bot replies with one button, **Open forms**, which opens `/miniapp`. Direct links such as `/miniapp/equipment` still work. After a successful save the Mini App closes and the bot confirms in chat, for example `Saved equipment #12: Dell Latitude 5440.` `/birthdays` and “Whose birthday is this month?” use the same birthday list. Apply `supabase/migrations/20261117140000_places_books_ips.sql` after the forms migration. Old location text is left in place until you approve a backfill.
 
 Telegram only opens a Mini App from an `https://` address. Set `PUBLIC_BASE_URL` to that origin with no path on the end. `/add` tells you to set it when the value is missing or still `http://`.
 

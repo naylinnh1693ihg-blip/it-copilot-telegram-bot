@@ -25,5 +25,5 @@ export async function sendAddMenu(deps: Deps, ctx: Context): Promise<void> {
     await ctx.reply("Forms need an HTTPS address. Set PUBLIC_BASE_URL to your public site or a tunnel, then send /add again.");
     return;
   }
-  await ctx.reply("What do you want to add?", { reply_markup: addFormKeyboard(base) });
+  await ctx.reply("Open the forms.", { reply_markup: addFormKeyboard(base) });
 }

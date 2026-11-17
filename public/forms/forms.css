@@ -11,6 +11,7 @@
   --shadow: 0 1px 2px rgb(28 25 23 / 6%);
   color: var(--text);
   background: var(--bg);
+  color-scheme: light;
   font-family: "Iowan Old Style", Palatino, "Palatino Linotype", Georgia, serif;
   font-size: 16px;
   line-height: 1.45;
@@ -96,11 +97,20 @@ input, select, textarea {
   width: 100%;
   font: inherit;
   color: var(--text);
+  -webkit-text-fill-color: var(--text);
+  caret-color: var(--text);
   background: var(--field);
+  color-scheme: inherit;
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 10px 12px;
   box-shadow: var(--shadow);
+}
+
+input::placeholder, textarea::placeholder {
+  color: var(--muted);
+  -webkit-text-fill-color: var(--muted);
+  opacity: 1;
 }
 
 textarea { min-height: 120px; resize: vertical; }
@@ -187,4 +197,36 @@ body.surface-miniapp .grid {
 
 body.surface-miniapp main {
   padding-bottom: 96px;
+}
+
+.day-month {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.4fr;
+  gap: 8px;
+}
+
+.home-list {
+  display: grid;
+  gap: 10px;
+}
+
+.home-link {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  text-decoration: none;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px;
+}
+
+.home-link strong { display: block; }
+.home-link span span { display: block; color: var(--muted); }
+.home-icon { font-size: 1.3rem; width: 1.6rem; text-align: center; }
+
+.record {
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  align-items: start;
 }

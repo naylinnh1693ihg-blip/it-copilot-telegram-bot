@@ -106,7 +106,9 @@ function regularNextRun(reminder: Reminder, nowIso: string): string | null {
 }
 
 function reminderText(reminder: Reminder): string {
-  return reminder.kind === "daily_summary" ? "Daily summary" : `Reminder: ${reminder.message}`;
+  if (reminder.kind === "daily_summary") return "Daily summary";
+  if (reminder.kind === "yearly") return reminder.message;
+  return `Reminder: ${reminder.message}`;
 }
 
 async function save(deps: Deps, reminder: Reminder): Promise<Reminder> {

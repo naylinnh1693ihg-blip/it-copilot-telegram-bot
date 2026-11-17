@@ -1,16 +1,24 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { IntentSchema, type Intent } from "../types/intent.js";
-import { DUPLICATE_EMAIL, DUPLICATE_URL } from "../forms/conflicts.js";
+import { DUPLICATE_EMAIL, DUPLICATE_ISBN, DUPLICATE_IP, DUPLICATE_LOCATION, DUPLICATE_URL, LOCATION_LOOP, REF_DENIED } from "../forms/conflicts.js";
 import type {
   AdminSession,
   AuditEntry,
+  Book,
+  BookCategory,
+  BookFormat,
+  BookStatus,
   Contact,
   ConversationTurn,
   DocumentRecord,
   Equipment,
   EquipmentKind,
   EquipmentStatus,
+  IpAddress,
+  IpKind,
   LinkCategory,
+  Location,
+  LocationKind,
   Memory,
   SavedLink,
   MemorySourceType,
@@ -25,12 +33,13 @@ import type {
   Task,
   TaskEvent,
   TaskStatus,
+  BirthdayReminder,
   User,
   UserRole,
 } from "../types/models.js";
-import { DatabaseError, DuplicateFieldError } from "../utils/errors.js";
+import { DatabaseError, DuplicateFieldError, FormFieldError } from "../utils/errors.js";
 import { redactString } from "../utils/text.js";
-import type { ChunkHit, ChunkSource, CompletedTask, Database, MemoryQuery, NewAdminLoginToken, NewAdminSession, NewContact, NewDocument, NewEquipment, NewKnowledge, NewMemory, NewNote, NewReminder, NewSavedLink, NewTask, SavedTextHit, StoredChunk, UsageSlice } from "./types.js";
+import type { ChunkHit, ChunkSource, CompletedTask, Database, MemoryQuery, NewAdminLoginToken, NewAdminSession, NewBook, NewContact, NewDocument, NewEquipment, NewIpAddress, NewKnowledge, NewLocation, NewMemory, NewNote, NewReminder, NewSavedLink, NewTask, SavedTextHit, StoredChunk, UsageSlice } from "./types.js";
 
 type Row = Record<string, unknown>;
 
@@ -73,6 +82,17 @@ function integer(row: Row, key: string): number {
   const number = typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
   if (!Number.isFinite(number)) throw new DatabaseError(`Column ${key} was not a number.`);
   return number;
+}
+
+function smallintOrNull(row: Row, key: string): number | null {
+  const value = row[key];
+  if (value == null || value === "") return null;
+  return integer(row, key);
+}
+
+function birthdayReminder(value: string): BirthdayReminder {
+  if (value === "day_before" || value === "on_the_day" || value === "none") return value;
+  throw new DatabaseError("Birthday reminder was not recognized.");
 }
 
 function textList(row: Row, key: string): string[] {
@@ -129,7 +149,109 @@ function duplicateField(error: QueryError): DuplicateFieldError | null {
   const blob = `${error.message} ${error.details ?? ""}`;
   if (blob.includes("contacts_user_email")) return new DuplicateFieldError("email", DUPLICATE_EMAIL);
   if (blob.includes("saved_links_user_url")) return new DuplicateFieldError("url", DUPLICATE_URL);
+  if (blob.includes("books_user_isbn")) return new DuplicateFieldError("isbn", DUPLICATE_ISBN);
+  if (blob.includes("ip_addresses_user_ip")) return new DuplicateFieldError("ip", DUPLICATE_IP);
+  if (blob.includes("locations_sibling_name")) return new DuplicateFieldError("name", DUPLICATE_LOCATION);
   return null;
+}
+
+function formFailure(error: QueryError): FormFieldError | null {
+  const message = error.message;
+  const ip = message.match(/ip_conflict:([a-z_]+):([\s\S]+)/);
+  if (ip?.[1] && ip[2]) return new FormFieldError(ip[1], ip[2].trim());
+  if (message.includes("location_loop")) return new FormFieldError("parent_location_id", LOCATION_LOOP);
+  const ref = message.match(/ref_denied:([a-z_]+)/);
+  if (ref?.[1]) return new FormFieldError(ref[1], REF_DENIED);
+  return duplicateField(error);
+}
+
+function locationKind(value: string): LocationKind {
+  if (value === "site" || value === "building" || value === "floor" || value === "room" || value === "data_center" || value === "remote") return value;
+  throw new DatabaseError("Location kind was not recognized.");
+}
+
+function bookCategory(value: string): BookCategory {
+  if (value === "networking" || value === "security" || value === "cloud" || value === "programming" || value === "management" || value === "other") return value;
+  throw new DatabaseError("Book category was not recognized.");
+}
+
+function bookFormat(value: string): BookFormat {
+  if (value === "physical" || value === "ebook" || value === "pdf" || value === "audiobook") return value;
+  throw new DatabaseError("Book format was not recognized.");
+}
+
+function bookStatus(value: string): BookStatus {
+  if (value === "to_read" || value === "reading" || value === "finished" || value === "lent_out") return value;
+  throw new DatabaseError("Book status was not recognized.");
+}
+
+function ipKind(value: string): IpKind {
+  if (value === "static" || value === "dhcp_reservation" || value === "gateway" || value === "dns" || value === "reserved") return value;
+  throw new DatabaseError("IP type was not recognized.");
+}
+
+function locationFrom(row: Row): Location {
+  return {
+    id: text(row, "id"),
+    userId: text(row, "user_id"),
+    locationNumber: integer(row, "location_number"),
+    name: text(row, "name"),
+    kind: locationKind(text(row, "kind")),
+    parentLocationId: textOrNull(row, "parent_location_id"),
+    streetAddress: text(row, "street_address"),
+    city: text(row, "city"),
+    country: text(row, "country"),
+    postalCode: text(row, "postal_code"),
+    mapUrl: text(row, "map_url"),
+    siteContactId: textOrNull(row, "site_contact_id"),
+    notes: text(row, "notes"),
+    createdAt: text(row, "created_at"),
+    updatedAt: text(row, "updated_at"),
+    deletedAt: textOrNull(row, "deleted_at"),
+  };
+}
+
+function bookFrom(row: Row): Book {
+  return {
+    id: text(row, "id"),
+    userId: text(row, "user_id"),
+    bookNumber: integer(row, "book_number"),
+    title: text(row, "title"),
+    author: text(row, "author"),
+    isbn: text(row, "isbn"),
+    publisher: text(row, "publisher"),
+    year: smallintOrNull(row, "year"),
+    category: bookCategory(text(row, "category")),
+    format: bookFormat(text(row, "format")),
+    status: bookStatus(text(row, "status")),
+    lentToContactId: textOrNull(row, "lent_to_contact_id"),
+    lentOn: textOrNull(row, "lent_on"),
+    notes: text(row, "notes"),
+    createdAt: text(row, "created_at"),
+    updatedAt: text(row, "updated_at"),
+    deletedAt: textOrNull(row, "deleted_at"),
+  };
+}
+
+function ipFrom(row: Row): IpAddress {
+  const ip = row.ip;
+  return {
+    id: text(row, "id"),
+    userId: text(row, "user_id"),
+    ipNumber: integer(row, "ip_number"),
+    ip: typeof ip === "string" ? ip : text(row, "ip"),
+    subnet: textOrNull(row, "subnet"),
+    vlan: smallintOrNull(row, "vlan"),
+    hostname: text(row, "hostname"),
+    macAddress: text(row, "mac_address"),
+    kind: ipKind(text(row, "kind")),
+    equipmentId: textOrNull(row, "equipment_id"),
+    locationId: textOrNull(row, "location_id"),
+    notes: text(row, "notes"),
+    createdAt: text(row, "created_at"),
+    updatedAt: text(row, "updated_at"),
+    deletedAt: textOrNull(row, "deleted_at"),
+  };
 }
 
 function equipmentFrom(row: Row): Equipment {
@@ -145,6 +267,7 @@ function equipmentFrom(row: Row): Equipment {
     status: equipmentStatus(text(row, "status")),
     purchaseDate: textOrNull(row, "purchase_date"),
     warrantyEnd: textOrNull(row, "warranty_end"),
+    locationId: textOrNull(row, "location_id"),
     notes: text(row, "notes"),
     sourceNoteId: textOrNull(row, "source_note_id"),
     sourceDocumentId: textOrNull(row, "source_document_id"),
@@ -167,6 +290,11 @@ function contactFrom(row: Row): Contact {
     location: text(row, "location"),
     telegramUsername: text(row, "telegram_username"),
     notes: text(row, "notes"),
+    locationId: textOrNull(row, "location_id"),
+    birthDay: smallintOrNull(row, "birth_day"),
+    birthMonth: smallintOrNull(row, "birth_month"),
+    birthYear: smallintOrNull(row, "birth_year"),
+    birthdayReminder: birthdayReminder(text(row, "birthday_reminder")),
     createdAt: text(row, "created_at"),
     updatedAt: text(row, "updated_at"),
     deletedAt: textOrNull(row, "deleted_at"),
@@ -1112,6 +1240,7 @@ export class SupabaseDatabase implements Database {
         status: input.status ?? "in_use",
         purchase_date: input.purchaseDate ?? null,
         warranty_end: input.warrantyEnd ?? null,
+        location_id: input.locationId ?? null,
         notes: input.notes,
         source_note_id: input.sourceNoteId,
         source_document_id: input.sourceDocumentId,
@@ -1137,6 +1266,7 @@ export class SupabaseDatabase implements Database {
         status: item.status,
         purchase_date: item.purchaseDate,
         warranty_end: item.warrantyEnd,
+        location_id: item.locationId,
         notes: item.notes,
         source_note_id: item.sourceNoteId,
         source_document_id: item.sourceDocumentId,
@@ -1178,6 +1308,11 @@ export class SupabaseDatabase implements Database {
         location: input.location,
         telegram_username: input.telegramUsername,
         notes: input.notes,
+        location_id: input.locationId ?? null,
+        birth_day: input.birthDay ?? null,
+        birth_month: input.birthMonth ?? null,
+        birth_year: input.birthYear ?? null,
+        birthday_reminder: input.birthdayReminder ?? "day_before",
         created_at: input.createdAt,
         updated_at: input.createdAt,
       })
@@ -1238,6 +1373,213 @@ export class SupabaseDatabase implements Database {
       .order("created_at", { ascending: false });
     this.raise(error);
     return rows(data).map(savedLinkFrom);
+  }
+
+  async updateContact(item: Contact): Promise<Contact> {
+    const { data, error } = await this.client
+      .from("contacts")
+      .update({
+        full_name: item.fullName,
+        email: item.email,
+        phone: item.phone,
+        department: item.department,
+        job_title: item.jobTitle,
+        location: item.location,
+        telegram_username: item.telegramUsername,
+        notes: item.notes,
+        location_id: item.locationId,
+        birth_day: item.birthDay,
+        birth_month: item.birthMonth,
+        birth_year: item.birthYear,
+        birthday_reminder: item.birthdayReminder,
+        updated_at: item.updatedAt,
+        deleted_at: item.deletedAt,
+      })
+      .eq("id", item.id)
+      .eq("user_id", item.userId)
+      .select("*")
+      .single();
+    this.raise(error);
+    if (!isRow(data)) throw new DatabaseError("Could not update the contact.");
+    return contactFrom(data);
+  }
+
+  async findContactById(id: string): Promise<Contact | null> {
+    const { data, error } = await this.client.from("contacts").select("*").eq("id", id).maybeSingle();
+    this.raise(error);
+    return isRow(data) ? contactFrom(data) : null;
+  }
+
+  async deleteContact(userId: string, id: string, deletedAt: string): Promise<Contact | null> {
+    const { data, error } = await this.client
+      .from("contacts")
+      .update({ deleted_at: deletedAt, updated_at: deletedAt })
+      .eq("user_id", userId)
+      .eq("id", id)
+      .is("deleted_at", null)
+      .select("*")
+      .maybeSingle();
+    this.raise(error);
+    return isRow(data) ? contactFrom(data) : null;
+  }
+
+  async insertLocation(input: NewLocation): Promise<Location> {
+    const locationNumber = await this.allocate(input.userId, "location");
+    const { data, error } = await this.client
+      .from("locations")
+      .insert({
+        user_id: input.userId,
+        location_number: locationNumber,
+        name: input.name,
+        kind: input.kind,
+        parent_location_id: input.parentLocationId,
+        street_address: input.streetAddress,
+        city: input.city,
+        country: input.country,
+        postal_code: input.postalCode,
+        map_url: input.mapUrl,
+        site_contact_id: input.siteContactId,
+        notes: input.notes,
+        created_at: input.createdAt,
+        updated_at: input.createdAt,
+      })
+      .select("*")
+      .single();
+    if (error) {
+      const failed = formFailure(error);
+      if (failed) throw failed;
+      this.raise(error);
+    }
+    if (!isRow(data)) throw new DatabaseError("Could not save the location.");
+    return locationFrom(data);
+  }
+
+  async listLocations(userId: string): Promise<Location[]> {
+    const { data, error } = await this.client.from("locations").select("*").eq("user_id", userId).is("deleted_at", null).order("name");
+    this.raise(error);
+    return rows(data).map(locationFrom);
+  }
+
+  async insertBook(input: NewBook): Promise<Book> {
+    const bookNumber = await this.allocate(input.userId, "book");
+    const { data, error } = await this.client
+      .from("books")
+      .insert({
+        user_id: input.userId,
+        book_number: bookNumber,
+        title: input.title,
+        author: input.author,
+        isbn: input.isbn,
+        publisher: input.publisher,
+        year: input.year,
+        category: input.category,
+        format: input.format,
+        status: input.status,
+        lent_to_contact_id: input.lentToContactId,
+        lent_on: input.lentOn,
+        notes: input.notes,
+        created_at: input.createdAt,
+        updated_at: input.createdAt,
+      })
+      .select("*")
+      .single();
+    if (error) {
+      const failed = formFailure(error);
+      if (failed) throw failed;
+      this.raise(error);
+    }
+    if (!isRow(data)) throw new DatabaseError("Could not save the book.");
+    return bookFrom(data);
+  }
+
+  async listBooks(userId: string): Promise<Book[]> {
+    const { data, error } = await this.client.from("books").select("*").eq("user_id", userId).is("deleted_at", null).order("created_at", { ascending: false });
+    this.raise(error);
+    return rows(data).map(bookFrom);
+  }
+
+  async listIpAddresses(userId: string): Promise<IpAddress[]> {
+    const { data, error } = await this.client.from("ip_addresses").select("*").eq("user_id", userId).is("deleted_at", null);
+    this.raise(error);
+    return rows(data).map(ipFrom);
+  }
+
+  async saveEquipmentAndIp(input: NewEquipment): Promise<Equipment> {
+    const { data, error } = await this.client.rpc("save_equipment_with_ip", {
+      p_user: input.userId,
+      p_name: input.name,
+      p_kind: input.kind,
+      p_location: input.location,
+      p_ip: input.ipAddress,
+      p_notes: input.notes,
+      p_serial: input.serialNumber ?? "",
+      p_status: input.status ?? "in_use",
+      p_purchase: input.purchaseDate ?? null,
+      p_warranty: input.warrantyEnd ?? null,
+      p_location_id: input.locationId ?? null,
+      p_source_note: input.sourceNoteId,
+      p_source_document: input.sourceDocumentId,
+      p_created_at: input.createdAt,
+    });
+    if (error) {
+      const failed = formFailure(error);
+      if (failed) throw failed;
+      this.raise(error);
+    }
+    if (!isRow(data)) throw new DatabaseError("Could not save equipment.");
+    return equipmentFrom(data);
+  }
+
+  async updateEquipmentAndIp(item: Equipment, previousIp: string): Promise<Equipment> {
+    const { data, error } = await this.client.rpc("update_equipment_with_ip", {
+      p_id: item.id,
+      p_user: item.userId,
+      p_name: item.name,
+      p_kind: item.kind,
+      p_location: item.location,
+      p_ip: item.ipAddress,
+      p_previous_ip: previousIp,
+      p_notes: item.notes,
+      p_serial: item.serialNumber,
+      p_status: item.status,
+      p_purchase: item.purchaseDate,
+      p_warranty: item.warrantyEnd,
+      p_location_id: item.locationId,
+      p_source_note: item.sourceNoteId,
+      p_source_document: item.sourceDocumentId,
+      p_deleted_at: item.deletedAt,
+      p_updated_at: item.updatedAt,
+    });
+    if (error) {
+      const failed = formFailure(error);
+      if (failed) throw failed;
+      this.raise(error);
+    }
+    if (!isRow(data)) throw new DatabaseError("Could not update equipment.");
+    return equipmentFrom(data);
+  }
+
+  async saveIpAndEquipment(input: NewIpAddress): Promise<IpAddress> {
+    const { data, error } = await this.client.rpc("save_ip_with_equipment", {
+      p_user: input.userId,
+      p_ip: input.ip,
+      p_subnet: input.subnet,
+      p_vlan: input.vlan,
+      p_hostname: input.hostname,
+      p_mac: input.macAddress,
+      p_kind: input.kind,
+      p_equipment_id: input.equipmentId,
+      p_location_id: input.locationId,
+      p_notes: input.notes,
+      p_created_at: input.createdAt,
+    });
+    if (error) {
+      const failed = formFailure(error);
+      if (failed) throw failed;
+      this.raise(error);
+    }
+    if (!isRow(data)) throw new DatabaseError("Could not save the IP address.");
+    return ipFrom(data);
   }
 
   async getExtraction(documentId: string): Promise<Extraction | null> {

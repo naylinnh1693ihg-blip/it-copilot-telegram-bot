@@ -11,11 +11,20 @@
   var IPV4 = /^(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
   var definition = null;
   var saving = false;
+  var view = script.getAttribute("data-view") || "";
   var webApp = telegram();
   if (surface === "miniapp" && webApp) {
     webApp.ready();
     webApp.expand();
     applyTheme();
+  }
+  if (view === "home") {
+    if (webApp && webApp.BackButton) webApp.BackButton.hide();
+    return;
+  }
+  if (view === "birthdays") {
+    renderBirthdays();
+    return;
   }
 
   function telegram() {
@@ -33,6 +42,21 @@
     if (theme.button_color) root.style.setProperty("--accent", theme.button_color);
     if (theme.button_text_color) root.style.setProperty("--on-accent", theme.button_text_color);
     if (theme.secondary_bg_color) root.style.setProperty("--surface", theme.secondary_bg_color);
+    var field = theme.section_bg_color || theme.secondary_bg_color;
+    if (!field && theme.text_color && !isLight(theme.text_color)) field = "#1c1c1e";
+    if (field) root.style.setProperty("--field", field);
+    if (theme.section_separator_color) root.style.setProperty("--line", theme.section_separator_color);
+    root.style.colorScheme = isLight(theme.bg_color || theme.secondary_bg_color || "#ffffff") ? "light" : "dark";
+  }
+
+  function isLight(color) {
+    var hex = String(color || "").replace("#", "");
+    if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+    if (!/^[0-9a-fA-F]{6}$/.test(hex)) return true;
+    var r = parseInt(hex.slice(0, 2), 16);
+    var g = parseInt(hex.slice(2, 4), 16);
+    var b = parseInt(hex.slice(4, 6), 16);
+    return (r * 299 + g * 587 + b * 114) / 1000 > 150;
   }
 
   function secretRisk(value) {
@@ -77,13 +101,44 @@
     if (input) input.setAttribute("aria-invalid", message ? "true" : "false");
   }
 
+  function refreshVisibility() {
+    if (!definition) return;
+    definition.fields.forEach(function (field) {
+      var wrap = document.getElementById("wrap-" + field.name);
+      if (wrap) wrap.hidden = !fieldShown(field);
+    });
+  }
+
+  function fieldShown(field) {
+    if (!field.showWhen) return true;
+    var other = document.getElementById("field-" + field.showWhen.field);
+    return !!other && other.value === field.showWhen.equals;
+  }
+
   function readFields() {
     var body = {};
     definition.fields.forEach(function (field) {
+      if (!fieldShown(field)) {
+        body[field.name] = field.type === "day_month" ? { day: "", month: "", year: "" } : "";
+        return;
+      }
+      if (field.type === "day_month") {
+        body[field.name] = {
+          day: valueOf("field-" + field.name + "-day"),
+          month: valueOf("field-" + field.name + "-month"),
+          year: valueOf("field-" + field.name + "-year"),
+        };
+        return;
+      }
       var input = document.getElementById("field-" + field.name);
       body[field.name] = input ? input.value : "";
     });
     return body;
+  }
+
+  function valueOf(id) {
+    var node = document.getElementById(id);
+    return node ? node.value : "";
   }
 
   function validateAll() {
@@ -133,7 +188,11 @@
     var list = document.getElementById("records");
     if (!list || surface !== "admin") return;
     var path = apiBase + "/records/" + encodeURIComponent(formId);
-    if (query) path += "?q=" + encodeURIComponent(query);
+    var params = [];
+    if (query) params.push("q=" + encodeURIComponent(query));
+    var subnet = document.getElementById("subnet");
+    if (subnet && subnet.value) params.push("subnet=" + encodeURIComponent(subnet.value));
+    if (params.length) path += "?" + params.join("&");
     fetch(path, { headers: { Accept: "application/json" } })
       .then(function (response) {
         if (response.status === 401) {
@@ -157,12 +216,26 @@
         records.forEach(function (record) {
           var row = document.createElement("div");
           row.className = "record";
-          var title = document.createElement("strong");
-          title.textContent = "#" + record.number + " " + record.title;
-          var detail = document.createElement("span");
-          detail.textContent = record.detail || "";
-          row.appendChild(title);
-          if (record.detail) row.appendChild(detail);
+          if (record.depth) row.style.paddingLeft = (record.depth * 16) + "px";
+          if (record.columns && record.columns.length) {
+            record.columns.forEach(function (column) {
+              var cell = document.createElement("span");
+              cell.textContent = column || "—";
+              row.appendChild(cell);
+            });
+          } else {
+            var title = document.createElement("strong");
+            title.textContent = "#" + record.number + " " + record.title;
+            var detail = document.createElement("span");
+            detail.textContent = record.detail || "";
+            row.appendChild(title);
+            if (record.detail) row.appendChild(detail);
+          }
+          if (record.legacy) {
+            var legacy = document.createElement("span");
+            legacy.textContent = record.legacy;
+            row.appendChild(legacy);
+          }
           list.appendChild(row);
         });
       })
@@ -172,26 +245,47 @@
   }
 
   function finishSave(body) {
-    if (surface === "miniapp") {
-      var webApp = telegram();
-      if (webApp && webApp.HapticFeedback) webApp.HapticFeedback.notificationOccurred("success");
+    var another = formId === "location";
+    var webApp = telegram();
+    if (surface === "miniapp" && webApp && webApp.HapticFeedback) webApp.HapticFeedback.notificationOccurred("success");
+    if (surface === "miniapp" && !another) {
       if (webApp) webApp.close();
       return;
     }
     var status = document.getElementById("status");
     if (status) {
       status.className = "ok";
-      status.textContent = "Saved #" + body.number + ": " + body.summary + ".";
+      status.textContent = another
+        ? "Saved #" + body.number + ": " + body.summary + ". Add another, or choose this one as the parent."
+        : "Saved #" + body.number + ": " + body.summary + ".";
     }
     definition.fields.forEach(function (field) {
+      if (field.type === "day_month") {
+        ["day", "month", "year"].forEach(function (part) {
+          var partInput = document.getElementById("field-" + field.name + "-" + part);
+          if (partInput) partInput.value = "";
+        });
+      }
       var input = document.getElementById("field-" + field.name);
       if (!input) return;
       input.value = field.default || "";
       showError(field.name, "");
     });
+    refreshRefs();
     var panel = document.getElementById("panel");
-    if (panel) panel.hidden = true;
-    loadRecords((document.getElementById("search") || {}).value || "");
+    if (panel) panel.hidden = !another;
+    if (surface === "admin") loadRecords((document.getElementById("search") || {}).value || "");
+    var name = document.getElementById("field-name");
+    if (another && name) name.focus();
+  }
+
+  function refreshRefs() {
+    if (!definition) return;
+    definition.fields.forEach(function (field) {
+      if (field.type !== "ref") return;
+      var input = document.getElementById("field-" + field.name);
+      if (input) fillRef(field, input);
+    });
   }
 
   function showServerErrors(errors) {
@@ -257,8 +351,10 @@
 
   function inputFor(field) {
     var input;
+    if (field.type === "day_month") return dayMonthControl(field);
+    if (field.type === "ref") return refControl(field);
     if (field.type === "textarea") input = document.createElement("textarea");
-    else if (field.type === "select") {
+    else if (field.type === "select" || field.type === "country") {
       input = document.createElement("select");
       var placeholder = document.createElement("option");
       placeholder.value = "";
@@ -273,8 +369,9 @@
       if (field.default) input.value = field.default;
     } else {
       input = document.createElement("input");
-      input.type = field.type === "textarea" ? "text" : field.type === "tags" || field.type === "ipv4" ? "text" : field.type;
-      if (field.type === "ipv4") input.setAttribute("inputmode", "decimal");
+      var plain = { tags: 1, ipv4: 1, isbn: 1, cidr: 1, mac: 1, vlan: 1 };
+      input.type = plain[field.type] ? "text" : field.type;
+      if (field.type === "ipv4" || field.type === "vlan") input.setAttribute("inputmode", "decimal");
     }
     input.id = "field-" + field.name;
     input.placeholder = field.placeholder || "";
@@ -283,6 +380,104 @@
     if (field.required) input.setAttribute("aria-required", "true");
     input.addEventListener("input", function () { showError(field.name, ""); });
     return input;
+  }
+
+  function dayMonthControl(field) {
+    var box = document.createElement("div");
+    box.className = "day-month";
+    ["day", "month", "year"].forEach(function (part) {
+      var input = document.createElement("input");
+      input.id = "field-" + field.name + "-" + part;
+      input.placeholder = part === "year" ? "Year, optional" : part === "day" ? "Day" : "Month";
+      input.setAttribute("inputmode", "numeric");
+      input.addEventListener("input", function () { showError(field.name, ""); });
+      box.appendChild(input);
+    });
+    return box;
+  }
+
+  function refControl(field) {
+    var box = document.createElement("div");
+    var input = document.createElement("select");
+    input.id = "field-" + field.name;
+    var none = document.createElement("option");
+    none.value = "";
+    none.textContent = field.required ? "Choose…" : "None";
+    input.appendChild(none);
+    input.addEventListener("change", function () { showError(field.name, ""); });
+    fillRef(field, input);
+    box.appendChild(input);
+    return box;
+  }
+
+  function fillRef(field, input) {
+    var selected = input.value;
+    fetch(apiBase + "/records/" + encodeURIComponent(field.refForm || ""), { headers: authHeaderNow() })
+      .then(function (response) { return response.ok ? response.json() : { records: [] }; })
+      .then(function (body) {
+        var label = input.options[0] ? input.options[0].textContent : (field.required ? "Choose…" : "None");
+        input.textContent = "";
+        var none = document.createElement("option");
+        none.value = "";
+        none.textContent = label;
+        input.appendChild(none);
+        var records = (body && body.records) || [];
+        records.forEach(function (record) {
+          var option = document.createElement("option");
+          option.value = record.id || "";
+          option.textContent = record.title || ("#" + record.number);
+          input.appendChild(option);
+        });
+        input.value = selected;
+        var box = input.parentNode;
+        if (records.length > 20 && box && !box.querySelector("input[type='search']")) {
+          var filter = document.createElement("input");
+          filter.type = "search";
+          filter.placeholder = "Search";
+          filter.addEventListener("input", function () {
+            var needle = filter.value.toLowerCase();
+            Array.prototype.forEach.call(input.options, function (option, index) {
+              if (index === 0) return;
+              option.hidden = needle && option.textContent.toLowerCase().indexOf(needle) === -1;
+            });
+          });
+          box.insertBefore(filter, input);
+        }
+      })
+      .catch(function () {});
+  }
+
+  function renderBirthdays() {
+    app.textContent = "";
+    var heading = document.createElement("h1");
+    heading.textContent = "Birthdays";
+    var list = document.createElement("section");
+    list.className = "records";
+    app.appendChild(heading);
+    app.appendChild(list);
+    fetch(apiBase + "/records/birthdays", { headers: authHeaderNow() })
+      .then(function (response) { return response.ok ? response.json() : { records: [] }; })
+      .then(function (body) {
+        var records = (body && body.records) || [];
+        if (!records.length) {
+          list.textContent = "No birthdays are saved yet.";
+          return;
+        }
+        records.forEach(function (record) {
+          var row = document.createElement("div");
+          row.className = "record";
+          (record.columns || []).forEach(function (column) {
+            if (!column) return;
+            var cell = document.createElement("span");
+            cell.textContent = column;
+            row.appendChild(cell);
+          });
+          list.appendChild(row);
+        });
+      })
+      .catch(function () {
+        list.textContent = "The birthday list could not be loaded.";
+      });
   }
 
   function render(form) {
@@ -310,6 +505,14 @@
         if (node) node.focus();
       });
       toolbar.appendChild(search);
+      if (form.subnetFilter) {
+        var subnet = document.createElement("input");
+        subnet.id = "subnet";
+        subnet.className = "search";
+        subnet.placeholder = "Filter by subnet, such as 192.168.1.0/24";
+        subnet.addEventListener("input", function () { loadRecords(search.value); });
+        toolbar.appendChild(subnet);
+      }
       toolbar.appendChild(add);
       var records = document.createElement("section");
       records.className = "records";
@@ -343,6 +546,7 @@
     grid.className = "grid";
     form.fields.forEach(function (field) {
       var wrap = document.createElement("div");
+      wrap.id = "wrap-" + field.name;
       wrap.className = "field" + (field.wide ? " wide" : "");
       var label = document.createElement("label");
       label.htmlFor = "field-" + field.name;
@@ -362,6 +566,8 @@
       wrap.appendChild(error);
       grid.appendChild(wrap);
     });
+    grid.addEventListener("change", refreshVisibility);
+    refreshVisibility();
     panel.appendChild(grid);
     var saveButton = document.createElement("button");
     saveButton.type = "button";

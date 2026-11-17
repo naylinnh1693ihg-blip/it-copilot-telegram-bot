@@ -12,7 +12,11 @@ const LINKS = [
 
 const FORM_LINKS = [
   { href: "/admin/equipment", label: "Equipment" },
-  { href: "/admin/contacts", label: "Contacts" },
+  { href: "/admin/ip-addresses", label: "IP addresses" },
+  { href: "/admin/locations", label: "Locations" },
+  { href: "/admin/contacts", label: "User information" },
+  { href: "/admin/birthdays", label: "Birthdays" },
+  { href: "/admin/books", label: "Books" },
   { href: "/admin/links", label: "Links" },
 ];
 

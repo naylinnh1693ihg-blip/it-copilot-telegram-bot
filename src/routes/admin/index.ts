@@ -249,7 +249,7 @@ export function createAdminRouter(deps: Deps, options: AdminRouterOptions = {}):
 
   router.use("/api", api);
 
-  for (const page of ["equipment", "contacts", "links"]) {
+  for (const page of ["equipment", "ip-addresses", "locations", "contacts", "birthdays", "books", "links"]) {
     router.get(`/${page}`, (req, res) => {
       const sessionId = sessionIdFrom(req);
       authenticate(deps, sessionId)

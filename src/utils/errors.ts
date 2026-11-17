@@ -12,13 +12,21 @@ export class DatabaseError extends Error {
   }
 }
 
-/** A unique index rejected the row. `field` is the form field that should show `message`. */
-export class DuplicateFieldError extends Error {
+/** A form field failed a check that needs saved records, such as a conflicting IP. */
+export class FormFieldError extends Error {
   constructor(
     public readonly field: string,
     message: string,
   ) {
     super(message);
+    this.name = "FormFieldError";
+  }
+}
+
+/** A unique index rejected the row. `field` is the form field that should show `message`. */
+export class DuplicateFieldError extends FormFieldError {
+  constructor(field: string, message: string) {
+    super(field, message);
     this.name = "DuplicateFieldError";
   }
 }

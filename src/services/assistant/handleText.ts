@@ -8,6 +8,7 @@ import { toIso } from "../../utils/time.js";
 import { runGrokAgent, toolsForMessage } from "./agent.js";
 import { execute, type Reply } from "./execute.js";
 import { isConfidentLocalIntent, parseLocalIntent } from "./localIntent.js";
+import { formatBirthdayReply, listBirthdayEntries, parseBirthdayQuestion } from "../forms/birthdays.js";
 import { handleEquipment, parseEquipmentCommand } from "./equipment.js";
 import { linkNoteCommand, parseNoteLinkCommand } from "../notes/links.js";
 import { createManyTasks, extractLocalTasks, extractTasksWithGrok } from "./multiTask.js";
@@ -140,6 +141,13 @@ export async function handleText(
       const reply = { text: noteLink === "clarify"
         ? "Which note, and which task or document? For example: Link note 2 to task 14."
         : await linkNoteCommand(deps, user, noteLink) };
+      await remember(deps, user, cleaned, reply.text);
+      return reply;
+    }
+    const birthdays = parseBirthdayQuestion(cleaned);
+    if (birthdays) {
+      deps.logger.info({ event: "message_route", route: "local_intent" }, "local_intent");
+      const reply = { text: formatBirthdayReply(await listBirthdayEntries(deps, user, birthdays), birthdays) };
       await remember(deps, user, cleaned, reply.text);
       return reply;
     }

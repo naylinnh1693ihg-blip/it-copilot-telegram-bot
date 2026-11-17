@@ -151,6 +151,8 @@ code {
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text);
+  -webkit-text-fill-color: var(--text);
+  caret-color: var(--text);
 }
 
 .field.area {

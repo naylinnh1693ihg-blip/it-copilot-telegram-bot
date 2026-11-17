@@ -1,10 +1,29 @@
 import { z } from "zod";
 import { IPV4 } from "../utils/net.js";
 import { cleanText, secretRisk } from "../utils/text.js";
+import { birthdayPartsOk, normalizeIsbn, normalizeMac, parseCidr } from "./checks.js";
+import { COUNTRIES, isCountryCode } from "./countries.js";
 
 export const SECRET_MESSAGE = "This looks like a secret. Don't store credentials here.";
 
-export const FIELD_TYPES = ["text", "textarea", "email", "url", "tel", "date", "select", "tags", "ipv4"] as const;
+export const FIELD_TYPES = [
+  "text",
+  "textarea",
+  "email",
+  "url",
+  "tel",
+  "date",
+  "select",
+  "tags",
+  "ipv4",
+  "ref",
+  "isbn",
+  "cidr",
+  "mac",
+  "vlan",
+  "country",
+  "day_month",
+] as const;
 export type FieldType = (typeof FIELD_TYPES)[number];
 
 export interface FieldOption {
@@ -25,6 +44,12 @@ export interface FieldDefinition {
   /** Desktop admin layout: this field spans both columns. */
   wide?: boolean;
   requiredMessage?: string;
+  /** Hide this field unless another field has this value. Hidden fields are cleared before save. */
+  showWhen?: { field: string; equals: string };
+  /** Record form that fills a ref dropdown. */
+  refForm?: string;
+  /** Field on that form used as the option label. */
+  refLabel?: string;
 }
 
 export interface FormDefinition {
@@ -32,6 +57,8 @@ export interface FormDefinition {
   title: string;
   submitLabel: string;
   fields: FieldDefinition[];
+  /** Admin list accepts a subnet query as well as text search. */
+  subnetFilter?: boolean;
 }
 
 export type FormValue = string | string[] | null;
@@ -181,6 +208,127 @@ function tagsSchema() {
     });
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function optionalText(field: FieldDefinition, check: (value: string, ctx: z.RefinementCtx) => void, transform?: (value: string) => string) {
+  const missing = field.requiredMessage ?? `Enter ${field.label.toLowerCase()}.`;
+  return z
+    .string({ error: missing })
+    .trim()
+    .superRefine((value, ctx) => {
+      if (!value) {
+        if (field.required) ctx.addIssue({ code: "custom", message: missing });
+        return;
+      }
+      if (value.length > field.maxLength) ctx.addIssue({ code: "custom", message: tooLong(field.label, field.maxLength) });
+      rejectSecret(value, ctx);
+      check(value, ctx);
+    })
+    .transform((value) => (transform ? transform(value) : value));
+}
+
+function isbnSchema(field: FieldDefinition) {
+  return optionalText(field, (value, ctx) => {
+    if (!normalizeIsbn(value)) ctx.addIssue({ code: "custom", message: "Enter a valid ISBN-10 or ISBN-13. The checksum did not match." });
+  }, (value) => (value ? normalizeIsbn(value) ?? "" : ""));
+}
+
+function cidrSchema(field: FieldDefinition) {
+  return optionalText(field, (value, ctx) => {
+    if (!parseCidr(value)) ctx.addIssue({ code: "custom", message: "Enter a subnet like 192.168.1.0/24." });
+  }, (value) => (value ? parseCidr(value) ?? "" : ""));
+}
+
+function macSchema(field: FieldDefinition) {
+  return optionalText(field, (value, ctx) => {
+    if (!normalizeMac(value)) ctx.addIssue({ code: "custom", message: "Enter a MAC address like AA:BB:CC:DD:EE:FF." });
+  }, (value) => (value ? normalizeMac(value) ?? "" : ""));
+}
+
+function vlanSchema(field: FieldDefinition) {
+  const missing = field.requiredMessage ?? "Enter a VLAN from 1 to 4094, or leave it blank.";
+  return z
+    .union([z.string(), z.number()], { error: missing })
+    .transform((value) => String(value).trim())
+    .superRefine((value, ctx) => {
+      if (!value) {
+        if (field.required) ctx.addIssue({ code: "custom", message: missing });
+        return;
+      }
+      if (!/^\d+$/.test(value)) {
+        ctx.addIssue({ code: "custom", message: "Enter a VLAN from 1 to 4094, or leave it blank." });
+        return;
+      }
+      const vlan = Number(value);
+      if (vlan < 1 || vlan > 4094) ctx.addIssue({ code: "custom", message: "Enter a VLAN from 1 to 4094, or leave it blank." });
+    });
+}
+
+function countrySchema(field: FieldDefinition) {
+  const missing = field.requiredMessage ?? "Choose a country.";
+  return z
+    .string({ error: missing })
+    .trim()
+    .transform((value) => value.toUpperCase())
+    .superRefine((value, ctx) => {
+      if (!value) {
+        if (field.required) ctx.addIssue({ code: "custom", message: missing });
+        return;
+      }
+      if (!isCountryCode(value)) ctx.addIssue({ code: "custom", message: "Choose a country from the list." });
+    });
+}
+
+function refSchema(field: FieldDefinition) {
+  const missing = field.requiredMessage ?? `Choose a ${field.label.toLowerCase()}.`;
+  return z.string({ error: missing }).trim().superRefine((value, ctx) => {
+    if (!value) {
+      if (field.required) ctx.addIssue({ code: "custom", message: missing });
+      return;
+    }
+    if (!UUID.test(value)) ctx.addIssue({ code: "custom", message: "Choose a record from your own list." });
+  });
+}
+
+function dayMonthSchema(_field: FieldDefinition) {
+  return z
+    .union([z.string(), z.object({ day: z.unknown(), month: z.unknown(), year: z.unknown() }).partial()], { error: "Enter the day and month, or leave the birthday blank." })
+    .transform((value) => {
+      if (typeof value === "string") {
+        if (!value.trim()) return "";
+        const [day, month, year] = value.split("|");
+        return packBirthday(day ?? "", month ?? "", year ?? "");
+      }
+      return packBirthday(String(value.day ?? ""), String(value.month ?? ""), String(value.year ?? ""));
+    })
+    .superRefine((value, ctx) => {
+      if (!value) return;
+      const [dayText, monthText, yearText] = value.split("|");
+      const day = dayText ? Number(dayText) : null;
+      const month = monthText ? Number(monthText) : null;
+      const year = yearText ? Number(yearText) : null;
+      if (!dayText && !monthText && !yearText) return;
+      if (!dayText || !monthText || !Number.isInteger(day) || !Number.isInteger(month) || (yearText && !Number.isInteger(year))) {
+        ctx.addIssue({ code: "custom", message: "Enter the day and month, or leave the birthday blank." });
+        return;
+      }
+      if (!birthdayPartsOk(day, month, yearText ? year : null)) {
+        ctx.addIssue({
+          code: "custom",
+          message: month === 2 && day === 29 ? "29 February needs a leap year, or leave the year blank." : "That day does not exist in that month.",
+        });
+      }
+    });
+}
+
+function packBirthday(day: string, month: string, year: string): string {
+  const d = day.trim();
+  const m = month.trim();
+  const y = year.trim();
+  if (!d && !m && !y) return "";
+  return `${d}|${m}|${y}`;
+}
+
 function rawFieldSchema(field: FieldDefinition): z.ZodType<FormValue> {
   switch (field.type) {
     case "email":
@@ -195,6 +343,20 @@ function rawFieldSchema(field: FieldDefinition): z.ZodType<FormValue> {
       return selectSchema(field);
     case "tags":
       return tagsSchema();
+    case "isbn":
+      return isbnSchema(field);
+    case "cidr":
+      return cidrSchema(field);
+    case "mac":
+      return macSchema(field);
+    case "vlan":
+      return vlanSchema(field);
+    case "country":
+      return countrySchema(field);
+    case "ref":
+      return refSchema(field);
+    case "day_month":
+      return dayMonthSchema(field);
     case "text":
     case "textarea":
     case "tel":
@@ -254,7 +416,11 @@ export function publicForm(form: FormDefinition): FormDefinition {
       ...(field.default ? { default: field.default } : {}),
       ...(field.wide ? { wide: true } : {}),
       ...(field.requiredMessage ? { requiredMessage: field.requiredMessage } : {}),
+      ...(field.showWhen ? { showWhen: field.showWhen } : {}),
+      ...(field.refForm ? { refForm: field.refForm, refLabel: field.refLabel } : {}),
+      ...(field.type === "country" ? { options: COUNTRIES.map((country) => ({ value: country.code, label: country.name })) } : {}),
     })),
+    ...(form.subnetFilter ? { subnetFilter: true } : {}),
   };
 }
 
@@ -271,4 +437,20 @@ export function tagsValue(data: FormData, name: string): string[] {
 export function dateValue(data: FormData, name: string): string | null {
   const value = data[name];
   return typeof value === "string" && value ? value : null;
+}
+
+export function birthdayValue(data: FormData, name: string): { day: number | null; month: number | null; year: number | null } {
+  const value = textValue(data, name);
+  if (!value) return { day: null, month: null, year: null };
+  const [day, month, year] = value.split("|");
+  return {
+    day: day ? Number(day) : null,
+    month: month ? Number(month) : null,
+    year: year ? Number(year) : null,
+  };
+}
+
+export function idValue(data: FormData, name: string): string | null {
+  const value = textValue(data, name);
+  return value || null;
 }

@@ -44,8 +44,8 @@ describe("Mini App initData", () => {
     const app = createHttpApp(deps, { sendTelegram: async (_chatId, text) => { sent.push(text); return { messageId: 1 }; } });
     const response = await request(app).post("/api/forms/equipment").set("X-Telegram-Init-Data", initData(42)).send(equipment);
     expect(response.status).toBe(201);
-    expect(response.body).toEqual({ number: 1, summary: "Dell Latitude 5440, Floor 2" });
-    expect(sent).toEqual(["Saved equipment #1: Dell Latitude 5440, Floor 2."]);
+    expect(response.body).toEqual({ number: 1, summary: "Dell Latitude 5440" });
+    expect(sent).toEqual(["Saved equipment #1: Dell Latitude 5440."]);
   });
 
   it("rejects a tampered hash", async () => {

@@ -4,6 +4,7 @@ import type { User, Equipment, EquipmentKind } from "../../types/models.js";
 import { IPV4 } from "../../utils/net.js";
 import { wrapUntrusted } from "../../utils/security.js";
 import { secretRisk } from "../../utils/text.js";
+import { FormFieldError } from "../../utils/errors.js";
 import { toIso } from "../../utils/time.js";
 import type { Intent } from "../../types/intent.js";
 import type { Reply } from "./execute.js";
@@ -233,28 +234,37 @@ async function saveDraft(
 ): Promise<Reply> {
   const now = toIso(deps.clock.now());
   const existing = (await deps.db.listEquipment(user.id)).find((item) => item.name.toLowerCase() === draft.name.toLowerCase());
-  const saved = existing
-    ? await deps.db.updateEquipment({
-        ...existing,
-        kind: draft.kind,
-        location: draft.location,
-        ipAddress: draft.ip,
-        notes: draft.notes || existing.notes,
-        sourceNoteId: sourceNoteId ?? existing.sourceNoteId,
-        sourceDocumentId: sourceDocumentId ?? existing.sourceDocumentId,
-        updatedAt: now,
-      })
-    : await deps.db.insertEquipment({
-        userId: user.id,
-        name: draft.name,
-        kind: draft.kind,
-        location: draft.location,
-        ipAddress: draft.ip,
-        notes: draft.notes,
-        sourceNoteId,
-        sourceDocumentId,
-        createdAt: now,
-      });
+  let saved;
+  try {
+    saved = existing
+      ? await deps.db.updateEquipmentAndIp(
+          {
+            ...existing,
+            kind: draft.kind,
+            location: draft.location,
+            ipAddress: draft.ip,
+            notes: draft.notes || existing.notes,
+            sourceNoteId: sourceNoteId ?? existing.sourceNoteId,
+            sourceDocumentId: sourceDocumentId ?? existing.sourceDocumentId,
+            updatedAt: now,
+          },
+          existing.ipAddress,
+        )
+      : await deps.db.saveEquipmentAndIp({
+          userId: user.id,
+          name: draft.name,
+          kind: draft.kind,
+          location: draft.location,
+          ipAddress: draft.ip,
+          notes: draft.notes,
+          sourceNoteId,
+          sourceDocumentId,
+          createdAt: now,
+        });
+  } catch (error) {
+    if (error instanceof FormFieldError) return { text: error.message };
+    throw error;
+  }
   await deps.db.writeAudit({
     userId: user.id,
     action: existing ? "equipment.update" : "equipment.create",

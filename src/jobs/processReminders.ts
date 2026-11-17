@@ -3,6 +3,7 @@ import type { Deps } from "../app/deps.js";
 import type { Reminder, User } from "../types/models.js";
 import { summaryFromRecords } from "../services/assistant/execute.js";
 import { reminderButtons, type ReminderButton } from "../services/reminders/buttons.js";
+import { birthdayPlan } from "../services/forms/birthdays.js";
 import { nextOccurrenceAfter } from "../services/reminders/schedule.js";
 import { redactString } from "../utils/text.js";
 import { toIso } from "../utils/time.js";
@@ -68,7 +69,11 @@ export async function processDueReminders(
     }
 
     try {
-      const text = reminder.kind === "daily_summary" ? await summaryFromRecords(deps, user, now.setZone(reminder.timezone)) : `Reminder: ${reminder.message}`;
+      const text = reminder.kind === "daily_summary"
+        ? await summaryFromRecords(deps, user, now.setZone(reminder.timezone))
+        : reminder.kind === "yearly"
+          ? reminder.message
+          : `Reminder: ${reminder.message}`;
       const sent = toGroup
         ? await options.send(reminder.deliveryChatId as number, text, reminderButtons(reminder.id), reminder.deliveryThreadId ? { threadId: reminder.deliveryThreadId } : undefined)
         : await options.send(user.telegramUserId, text, reminderButtons(reminder.id));
@@ -93,18 +98,27 @@ export async function processDueReminders(
  * The next regular run after this occurrence. A pending snooze keeps the schedule it interrupted.
  * Either way, times that have already passed are skipped so missed runs are not sent back to back.
  */
-function nextScheduledRun(reminder: Reminder, occurrence: string, nowIso: string): string | null {
+async function nextScheduledRun(deps: Deps, reminder: Reminder, occurrence: string, nowIso: string): Promise<{ at: string | null; message: string | null }> {
+  if (reminder.dedupeKey.startsWith("birthday:")) {
+    const contact = await deps.db.findContactById(reminder.dedupeKey.slice("birthday:".length));
+    if (!contact || contact.deletedAt || !contact.birthDay || !contact.birthMonth || contact.birthdayReminder === "none") {
+      return { at: null, message: null };
+    }
+    const plan = birthdayPlan(contact, DateTime.fromISO(nowIso).setZone(reminder.timezone));
+    return { at: plan ? toIso(plan.fireAt) : null, message: plan?.message ?? null };
+  }
   const base = reminder.snoozedNextRunAt ?? occurrence;
-  return nextOccurrenceAfter(reminder.kind, base, reminder.timezone, reminder.intervalMinutes, nowIso);
+  return { at: nextOccurrenceAfter(reminder.kind, base, reminder.timezone, reminder.intervalMinutes, nowIso), message: null };
 }
 
 async function advance(deps: Deps, reminder: Reminder, occurrence: string): Promise<void> {
   const nowIso = toIso(deps.clock.now());
-  const next = nextScheduledRun(reminder, occurrence, nowIso);
+  const next = await nextScheduledRun(deps, reminder, occurrence, nowIso);
   await save(deps, {
     ...reminder,
-    status: next ? "active" : "completed",
-    nextRunAt: next ?? occurrence,
+    message: next.message ?? reminder.message,
+    status: next.at ? "active" : "completed",
+    nextRunAt: next.at ?? occurrence,
     attemptOccurrenceAt: null,
     snoozedNextRunAt: null,
     lockedUntil: null,
@@ -124,11 +138,12 @@ async function fail(
   now: DateTime,
 ): Promise<void> {
   if (attempt >= MAX_ATTEMPTS) {
-    const next = nextScheduledRun(reminder, occurrence, toIso(now));
+    const next = await nextScheduledRun(deps, reminder, occurrence, toIso(now));
     await save(deps, {
       ...reminder,
-      status: next ? "active" : "failed",
-      nextRunAt: next ?? toIso(now.plus({ hours: 1 })),
+      message: next.message ?? reminder.message,
+      status: next.at ? "active" : "failed",
+      nextRunAt: next.at ?? toIso(now.plus({ hours: 1 })),
       attemptOccurrenceAt: null,
       snoozedNextRunAt: null,
       lockedUntil: null,

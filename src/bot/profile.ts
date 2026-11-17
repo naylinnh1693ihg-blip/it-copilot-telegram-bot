@@ -20,6 +20,7 @@ export const BOT_COMMANDS: BotCommand[] = [
   { command: "memories", description: "List what I remember about you" },
   { command: "forget", description: "Forget a memory by number" },
   { command: "add", description: "Add equipment, a contact, or a link" },
+  { command: "birthdays", description: "Show upcoming birthdays" },
   { command: "admin", description: "Get a sign-in link for the admin web app" },
 ];
 

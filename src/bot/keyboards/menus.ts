@@ -14,14 +14,9 @@ export function mainMenu(): InlineKeyboard {
     .text("Add", "m:add");
 }
 
-/** Three Mini App buttons. `baseUrl` must already be https. */
+/** One Mini App button for the forms home. `baseUrl` must already be https. */
 export function addFormKeyboard(baseUrl: string): InlineKeyboard {
-  return new InlineKeyboard()
-    .webApp("Equipment", `${baseUrl}/miniapp/equipment`)
-    .row()
-    .webApp("Contact", `${baseUrl}/miniapp/contact`)
-    .row()
-    .webApp("Website link", `${baseUrl}/miniapp/link`);
+  return new InlineKeyboard().webApp("Open forms", `${baseUrl}/miniapp`);
 }
 
 export function confirmKeyboard(): InlineKeyboard {

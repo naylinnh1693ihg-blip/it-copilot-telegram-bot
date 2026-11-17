@@ -2,14 +2,23 @@ import type { Intent } from "../types/intent.js";
 import type {
   AdminSession,
   AuditEntry,
+  Book,
   Contact,
   ConversationTurn,
+  IpAddress,
+  Location,
   DocumentRecord,
   Equipment,
   SavedLink,
   Memory,
   MemorySourceType,
   MemoryType,
+  BirthdayReminder,
+  BookCategory,
+  BookFormat,
+  BookStatus,
+  IpKind,
+  LocationKind,
   Extraction,
   KnowledgeEntry,
   Note,
@@ -118,6 +127,7 @@ export interface NewEquipment {
   status?: Equipment["status"];
   purchaseDate?: string | null;
   warrantyEnd?: string | null;
+  locationId?: string | null;
   sourceNoteId: string | null;
   sourceDocumentId: string | null;
   createdAt: string;
@@ -132,6 +142,56 @@ export interface NewContact {
   jobTitle: string;
   location: string;
   telegramUsername: string;
+  notes: string;
+  locationId?: string | null;
+  birthDay?: number | null;
+  birthMonth?: number | null;
+  birthYear?: number | null;
+  birthdayReminder?: BirthdayReminder;
+  createdAt: string;
+}
+
+export interface NewLocation {
+  userId: string;
+  name: string;
+  kind: LocationKind;
+  parentLocationId: string | null;
+  streetAddress: string;
+  city: string;
+  country: string;
+  postalCode: string;
+  mapUrl: string;
+  siteContactId: string | null;
+  notes: string;
+  createdAt: string;
+}
+
+export interface NewBook {
+  userId: string;
+  title: string;
+  author: string;
+  isbn: string;
+  publisher: string;
+  year: number | null;
+  category: BookCategory;
+  format: BookFormat;
+  status: BookStatus;
+  lentToContactId: string | null;
+  lentOn: string | null;
+  notes: string;
+  createdAt: string;
+}
+
+export interface NewIpAddress {
+  userId: string;
+  ip: string;
+  subnet: string | null;
+  vlan: number | null;
+  hostname: string;
+  macAddress: string;
+  kind: IpKind;
+  equipmentId: string | null;
+  locationId: string | null;
   notes: string;
   createdAt: string;
 }
@@ -301,7 +361,25 @@ export interface Database {
   updateEquipment(item: Equipment): Promise<Equipment>;
   listEquipment(userId: string): Promise<Equipment[]>;
   insertContact(input: NewContact): Promise<Contact>;
+  updateContact(item: Contact): Promise<Contact>;
+  findContactById(id: string): Promise<Contact | null>;
+  /** Soft-deletes a live contact. Returns null when it is already gone. */
+  deleteContact(userId: string, id: string, deletedAt: string): Promise<Contact | null>;
   listContacts(userId: string): Promise<Contact[]>;
+  insertLocation(input: NewLocation): Promise<Location>;
+  listLocations(userId: string): Promise<Location[]>;
+  insertBook(input: NewBook): Promise<Book>;
+  listBooks(userId: string): Promise<Book[]>;
+  listIpAddresses(userId: string): Promise<IpAddress[]>;
+  /**
+   * Inserts equipment and, when an IP is set, the matching ip_addresses row.
+   * A conflicting assignment throws FormFieldError and leaves both tables unchanged.
+   */
+  saveEquipmentAndIp(input: NewEquipment): Promise<Equipment>;
+  /** Updates equipment and keeps ip_addresses pointed at the same device. */
+  updateEquipmentAndIp(item: Equipment, previousIp: string): Promise<Equipment>;
+  /** Inserts or links an IP row and copies that address onto the chosen device. */
+  saveIpAndEquipment(input: NewIpAddress): Promise<IpAddress>;
   insertSavedLink(input: NewSavedLink): Promise<SavedLink>;
   listSavedLinks(userId: string): Promise<SavedLink[]>;
   saveExtraction(extraction: Extraction): Promise<void>;

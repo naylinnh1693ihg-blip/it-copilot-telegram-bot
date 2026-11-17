@@ -99,6 +99,7 @@ export function advanceOccurrence(
     return toIso(occurrence.plus({ minutes: intervalMinutes }));
   }
   if (kind === "weekly") return toIso(occurrence.plus({ weeks: 1 }));
+  if (kind === "yearly") return toIso(occurrence.plus({ years: 1 }));
   return toIso(occurrence.plus({ days: 1 }));
 }
 
@@ -139,7 +140,7 @@ export function nextOccurrenceAfter(
     return toIso(occurrence);
   }
   // Step in local calendar units so the wall-clock time survives daylight-saving changes.
-  const unit = kind === "weekly" ? "weeks" : "days";
+  const unit = kind === "yearly" ? "years" : kind === "weekly" ? "weeks" : "days";
   const skipped = Math.max(Math.floor(after.diff(occurrence, unit).as(unit)), 0);
   occurrence = occurrence.plus({ [unit]: skipped });
   while (occurrence <= after) occurrence = occurrence.plus({ [unit]: 1 });

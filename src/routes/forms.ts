@@ -4,7 +4,8 @@ import { findForm, parseForm, publicForm } from "../forms/index.js";
 import { confirmationText, listFormRecords, logFormFailure, saveFormRecord } from "../services/forms/records.js";
 import { validateInitData } from "../services/telegram/initData.js";
 import type { User } from "../types/models.js";
-import { DuplicateFieldError } from "../utils/errors.js";
+import { listBirthdayEntries } from "../services/forms/birthdays.js";
+import { FormFieldError } from "../utils/errors.js";
 import { createRateLimiter } from "../utils/security.js";
 import { redactString } from "../utils/text.js";
 import { toIso } from "../utils/time.js";
@@ -54,14 +55,30 @@ export function registerFormHandlers(
   router.get(
     "/records/:formId",
     options.wrap(async (req, res) => {
-      const form = findForm(formIdFrom(req));
+      const user = options.currentUser(res);
+      const formId = formIdFrom(req);
+      if (formId === "birthdays") {
+        const scope = req.query.scope === "month" ? "month" : "upcoming";
+        const entries = await listBirthdayEntries(deps, user, scope);
+        res.json({
+          records: entries.map((entry) => ({
+            number: entry.number,
+            title: entry.name,
+            detail: entry.department,
+            createdAt: entry.sortAt,
+            columns: [entry.name, entry.department, entry.dateLabel, entry.when, entry.age == null ? "" : String(entry.age)],
+          })),
+        });
+        return;
+      }
+      const form = findForm(formId);
       if (!form) {
         res.status(404).json({ error: "That form does not exist." });
         return;
       }
-      const user = options.currentUser(res);
       const query = typeof req.query.q === "string" ? req.query.q : "";
-      const records = await listFormRecords(deps, user.id, form.id, query);
+      const subnet = typeof req.query.subnet === "string" ? req.query.subnet : "";
+      const records = await listFormRecords(deps, user.id, form.id, query, subnet);
       res.json({ records });
     }),
   );
@@ -101,7 +118,7 @@ export function registerFormHandlers(
         }
         res.status(201).json({ number: saved.number, summary: saved.summary });
       } catch (error) {
-        if (error instanceof DuplicateFieldError) {
+        if (error instanceof FormFieldError) {
           res.status(422).json({ errors: { [error.field]: error.message } });
           return;
         }

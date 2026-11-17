@@ -3,11 +3,14 @@ import { IntentSchema, type Intent } from "../types/intent.js";
 import type {
   AdminSession,
   AuditEntry,
+  Book,
   Contact,
   ConversationTurn,
   Delivery,
   DocumentRecord,
   Equipment,
+  IpAddress,
+  Location,
   Memory,
   SavedLink,
   Extraction,
@@ -21,9 +24,10 @@ import type {
   UserRole,
 } from "../types/models.js";
 import { SAVED_TEXT_MIN_SIMILARITY, cosineSimilarity, hybridScore, lexicalSimilarity, trigramWordSimilarity } from "./similarity.js";
-import { DuplicateFieldError } from "../utils/errors.js";
-import type { ChunkHit, ChunkSource, CompletedTask, Database, MemoryQuery, NewAdminLoginToken, NewAdminSession, NewContact, NewDocument, NewEquipment, NewKnowledge, NewMemory, NewNote, NewReminder, NewSavedLink, NewTask, SavedTextHit, StoredChunk, UsageSlice } from "./types.js";
-import { DUPLICATE_EMAIL, DUPLICATE_URL } from "../forms/conflicts.js";
+import { locationWouldLoop } from "../forms/checks.js";
+import { DUPLICATE_EMAIL, DUPLICATE_ISBN, DUPLICATE_IP, DUPLICATE_LOCATION, DUPLICATE_URL, LOCATION_LOOP, REF_DENIED } from "../forms/conflicts.js";
+import { DuplicateFieldError, FormFieldError } from "../utils/errors.js";
+import type { ChunkHit, ChunkSource, CompletedTask, Database, MemoryQuery, NewAdminLoginToken, NewAdminSession, NewBook, NewContact, NewDocument, NewEquipment, NewIpAddress, NewKnowledge, NewLocation, NewMemory, NewNote, NewReminder, NewSavedLink, NewTask, SavedTextHit, StoredChunk, UsageSlice } from "./types.js";
 
 interface Counters {
   task: number;
@@ -35,6 +39,9 @@ interface Counters {
   memory: number;
   contact: number;
   link: number;
+  location: number;
+  book: number;
+  ip: number;
 }
 
 const EMPTY_COUNTERS: Counters = {
@@ -47,6 +54,9 @@ const EMPTY_COUNTERS: Counters = {
   memory: 0,
   contact: 0,
   link: 0,
+  location: 0,
+  book: 0,
+  ip: 0,
 };
 
 function copy<T>(value: T): T {
@@ -90,7 +100,12 @@ export class MemoryDatabase implements Database {
   private documents: DocumentRecord[] = [];
   private equipment: Equipment[] = [];
   private contacts: Contact[] = [];
+  private locations: Location[] = [];
+  private books: Book[] = [];
+  private ipAddresses: IpAddress[] = [];
   private savedLinks: SavedLink[] = [];
+  /** Test hook: the next equipment or IP save throws after writing, then rolls both tables back. */
+  failNextIpWrite = false;
   private chunks: Array<StoredChunk & { userId: string }> = [];
   private extractions: Extraction[] = [];
   private updates = new Set<number>();
@@ -587,6 +602,7 @@ export class MemoryDatabase implements Database {
       status: input.status ?? "in_use",
       purchaseDate: input.purchaseDate ?? null,
       warrantyEnd: input.warrantyEnd ?? null,
+      locationId: input.locationId ?? null,
       notes: input.notes,
       sourceNoteId: input.sourceNoteId,
       sourceDocumentId: input.sourceDocumentId,
@@ -626,6 +642,11 @@ export class MemoryDatabase implements Database {
       location: input.location,
       telegramUsername: input.telegramUsername,
       notes: input.notes,
+      locationId: input.locationId ?? null,
+      birthDay: input.birthDay ?? null,
+      birthMonth: input.birthMonth ?? null,
+      birthYear: input.birthYear ?? null,
+      birthdayReminder: input.birthdayReminder ?? "day_before",
       createdAt: input.createdAt,
       updatedAt: input.createdAt,
       deletedAt: null,
@@ -667,6 +688,280 @@ export class MemoryDatabase implements Database {
       .filter((item) => item.userId === userId && !item.deletedAt)
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.linkNumber - left.linkNumber)
       .map((item) => copy(item));
+  }
+
+  async updateContact(item: Contact): Promise<Contact> {
+    const index = this.contacts.findIndex((entry) => entry.id === item.id);
+    if (index < 0) throw new Error("Contact not found");
+    this.contacts[index] = copy(item);
+    return copy(item);
+  }
+
+  async findContactById(id: string): Promise<Contact | null> {
+    return copy(this.contacts.find((item) => item.id === id) ?? null);
+  }
+
+  async deleteContact(userId: string, id: string, deletedAt: string): Promise<Contact | null> {
+    const item = this.contacts.find((entry) => entry.id === id && entry.userId === userId && !entry.deletedAt);
+    if (!item) return null;
+    item.deletedAt = deletedAt;
+    item.updatedAt = deletedAt;
+    return copy(item);
+  }
+
+  async insertLocation(input: NewLocation): Promise<Location> {
+    this.requireLocation(input.userId, input.parentLocationId, "parent_location_id");
+    this.requireContact(input.userId, input.siteContactId, "site_contact_id");
+    if (locationWouldLoop(this.locations.filter((item) => item.userId === input.userId && !item.deletedAt).map((item) => ({ id: item.id, parentId: item.parentLocationId })), null, input.parentLocationId)) {
+      throw new FormFieldError("parent_location_id", LOCATION_LOOP);
+    }
+    if (this.locations.some((item) => item.userId === input.userId && !item.deletedAt && item.parentLocationId === input.parentLocationId && item.name.toLowerCase() === input.name.toLowerCase())) {
+      throw new DuplicateFieldError("name", DUPLICATE_LOCATION);
+    }
+    const item: Location = {
+      id: randomUUID(),
+      userId: input.userId,
+      locationNumber: this.nextCounter(input.userId, "location"),
+      name: input.name,
+      kind: input.kind,
+      parentLocationId: input.parentLocationId,
+      streetAddress: input.streetAddress,
+      city: input.city,
+      country: input.country,
+      postalCode: input.postalCode,
+      mapUrl: input.mapUrl,
+      siteContactId: input.siteContactId,
+      notes: input.notes,
+      createdAt: input.createdAt,
+      updatedAt: input.createdAt,
+      deletedAt: null,
+    };
+    this.locations.push(item);
+    return copy(item);
+  }
+
+  async listLocations(userId: string): Promise<Location[]> {
+    return this.locations.filter((item) => item.userId === userId && !item.deletedAt).map((item) => copy(item));
+  }
+
+  /** Moves a location under a new parent. Rejects a parent that would create a loop. */
+  async moveLocation(userId: string, id: string, parentLocationId: string | null): Promise<Location> {
+    const item = this.locations.find((entry) => entry.id === id && entry.userId === userId && !entry.deletedAt);
+    if (!item) throw new FormFieldError("parent_location_id", REF_DENIED);
+    this.requireLocation(userId, parentLocationId, "parent_location_id");
+    const rows = this.locations.filter((entry) => entry.userId === userId && !entry.deletedAt).map((entry) => ({ id: entry.id, parentId: entry.parentLocationId }));
+    if (locationWouldLoop(rows, id, parentLocationId)) throw new FormFieldError("parent_location_id", LOCATION_LOOP);
+    item.parentLocationId = parentLocationId;
+    return copy(item);
+  }
+
+  async insertBook(input: NewBook): Promise<Book> {
+    this.requireContact(input.userId, input.lentToContactId, "lent_to_contact_id");
+    if (input.isbn && this.books.some((item) => item.userId === input.userId && !item.deletedAt && item.isbn === input.isbn)) {
+      throw new DuplicateFieldError("isbn", DUPLICATE_ISBN);
+    }
+    const item: Book = {
+      id: randomUUID(),
+      userId: input.userId,
+      bookNumber: this.nextCounter(input.userId, "book"),
+      title: input.title,
+      author: input.author,
+      isbn: input.isbn,
+      publisher: input.publisher,
+      year: input.year,
+      category: input.category,
+      format: input.format,
+      status: input.status,
+      lentToContactId: input.lentToContactId,
+      lentOn: input.lentOn,
+      notes: input.notes,
+      createdAt: input.createdAt,
+      updatedAt: input.createdAt,
+      deletedAt: null,
+    };
+    this.books.push(item);
+    return copy(item);
+  }
+
+  async listBooks(userId: string): Promise<Book[]> {
+    return this.books
+      .filter((item) => item.userId === userId && !item.deletedAt)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.bookNumber - left.bookNumber)
+      .map((item) => copy(item));
+  }
+
+  async listIpAddresses(userId: string): Promise<IpAddress[]> {
+    return this.ipAddresses.filter((item) => item.userId === userId && !item.deletedAt).map((item) => copy(item));
+  }
+
+  async saveEquipmentAndIp(input: NewEquipment): Promise<Equipment> {
+    this.requireLocation(input.userId, input.locationId ?? null, "location_id");
+    const snapshot = this.ipSnapshot();
+    try {
+      const item = await this.insertEquipment(input);
+      if (input.ipAddress) this.attachIp(item, "", input.ipAddress, input.createdAt);
+      this.maybeFailIpWrite();
+      return copy(this.equipment.find((entry) => entry.id === item.id) ?? item);
+    } catch (error) {
+      this.restoreIp(snapshot);
+      throw error;
+    }
+  }
+
+  async updateEquipmentAndIp(item: Equipment, previousIp: string): Promise<Equipment> {
+    const snapshot = this.ipSnapshot();
+    try {
+      await this.updateEquipment(item);
+      if (previousIp !== item.ipAddress || item.ipAddress) this.attachIp(item, previousIp, item.ipAddress, item.updatedAt);
+      this.maybeFailIpWrite();
+      return copy(this.equipment.find((entry) => entry.id === item.id) ?? item);
+    } catch (error) {
+      this.restoreIp(snapshot);
+      throw error;
+    }
+  }
+
+  async saveIpAndEquipment(input: NewIpAddress): Promise<IpAddress> {
+    const device = this.requireEquipment(input.userId, input.equipmentId, "equipment_id");
+    this.requireLocation(input.userId, input.locationId, "location_id");
+    const snapshot = this.ipSnapshot();
+    try {
+      const existing = this.ipAddresses.find((row) => row.userId === input.userId && !row.deletedAt && row.ip === input.ip);
+      if (existing?.equipmentId && existing.equipmentId !== input.equipmentId) {
+        const holder = this.equipment.find((item) => item.id === existing.equipmentId);
+        throw new FormFieldError("ip", `${input.ip} is already assigned to ${holder?.name ?? "another device"} (#${holder?.equipmentNumber ?? 0}).`);
+      }
+      let saved: IpAddress;
+      if (existing) {
+        existing.subnet = input.subnet;
+        existing.vlan = input.vlan;
+        existing.hostname = input.hostname;
+        existing.macAddress = input.macAddress;
+        existing.kind = input.kind;
+        existing.equipmentId = input.equipmentId;
+        existing.locationId = input.locationId;
+        existing.notes = input.notes;
+        existing.updatedAt = input.createdAt;
+        saved = existing;
+      } else {
+        if (this.ipAddresses.some((row) => row.userId === input.userId && !row.deletedAt && row.ip === input.ip)) {
+          throw new DuplicateFieldError("ip", DUPLICATE_IP);
+        }
+        saved = {
+          id: randomUUID(),
+          userId: input.userId,
+          ipNumber: this.nextCounter(input.userId, "ip"),
+          ip: input.ip,
+          subnet: input.subnet,
+          vlan: input.vlan,
+          hostname: input.hostname,
+          macAddress: input.macAddress,
+          kind: input.kind,
+          equipmentId: input.equipmentId,
+          locationId: input.locationId,
+          notes: input.notes,
+          createdAt: input.createdAt,
+          updatedAt: input.createdAt,
+          deletedAt: null,
+        };
+        this.ipAddresses.push(saved);
+      }
+      if (device && device.ipAddress !== input.ip) {
+        const previous = this.ipAddresses.find((row) => row.userId === input.userId && !row.deletedAt && row.ip === device.ipAddress && row.equipmentId === device.id);
+        if (previous) previous.equipmentId = null;
+        device.ipAddress = input.ip;
+        device.updatedAt = input.createdAt;
+      } else if (device) {
+        device.ipAddress = input.ip;
+      }
+      this.maybeFailIpWrite();
+      return copy(saved);
+    } catch (error) {
+      this.restoreIp(snapshot);
+      throw error;
+    }
+  }
+
+  private maybeFailIpWrite(): void {
+    if (!this.failNextIpWrite) return;
+    this.failNextIpWrite = false;
+    throw new Error("ip write failed");
+  }
+
+  private ipSnapshot(): { equipment: Equipment[]; ipAddresses: IpAddress[]; counters: Map<string, Counters> } {
+    return {
+      equipment: this.equipment.map((item) => copy(item)),
+      ipAddresses: this.ipAddresses.map((item) => copy(item)),
+      counters: new Map([...this.counters.entries()].map(([id, counters]) => [id, { ...counters }])),
+    };
+  }
+
+  private restoreIp(snapshot: { equipment: Equipment[]; ipAddresses: IpAddress[]; counters: Map<string, Counters> }): void {
+    this.equipment = snapshot.equipment;
+    this.ipAddresses = snapshot.ipAddresses;
+    this.counters = snapshot.counters;
+  }
+
+  private attachIp(equipment: Equipment, previousIp: string, nextIp: string, at: string): void {
+    if (previousIp && previousIp !== nextIp) {
+      const old = this.ipAddresses.find((row) => row.userId === equipment.userId && !row.deletedAt && row.ip === previousIp && row.equipmentId === equipment.id);
+      if (old) {
+        old.equipmentId = null;
+        old.updatedAt = at;
+      }
+    }
+    const stored = this.equipment.find((item) => item.id === equipment.id);
+    if (!nextIp) {
+      if (stored) stored.ipAddress = "";
+      return;
+    }
+    const existing = this.ipAddresses.find((row) => row.userId === equipment.userId && !row.deletedAt && row.ip === nextIp);
+    if (existing?.equipmentId && existing.equipmentId !== equipment.id) {
+      const holder = this.equipment.find((item) => item.id === existing.equipmentId);
+      throw new FormFieldError("ip_address", `${nextIp} is already assigned to ${holder?.name ?? "another device"} (#${holder?.equipmentNumber ?? 0}).`);
+    }
+    if (existing) {
+      existing.equipmentId = equipment.id;
+      existing.updatedAt = at;
+    } else {
+      this.ipAddresses.push({
+        id: randomUUID(),
+        userId: equipment.userId,
+        ipNumber: this.nextCounter(equipment.userId, "ip"),
+        ip: nextIp,
+        subnet: null,
+        vlan: null,
+        hostname: "",
+        macAddress: "",
+        kind: "static",
+        equipmentId: equipment.id,
+        locationId: null,
+        notes: "",
+        createdAt: at,
+        updatedAt: at,
+        deletedAt: null,
+      });
+    }
+    if (stored) stored.ipAddress = nextIp;
+  }
+
+  private requireContact(userId: string, id: string | null, field: string): void {
+    if (!id) return;
+    const found = this.contacts.some((item) => item.id === id && item.userId === userId && !item.deletedAt);
+    if (!found) throw new FormFieldError(field, REF_DENIED);
+  }
+
+  private requireLocation(userId: string, id: string | null, field: string): void {
+    if (!id) return;
+    const found = this.locations.some((item) => item.id === id && item.userId === userId && !item.deletedAt);
+    if (!found) throw new FormFieldError(field, REF_DENIED);
+  }
+
+  private requireEquipment(userId: string, id: string | null, field: string): Equipment | null {
+    if (!id) return null;
+    const found = this.equipment.find((item) => item.id === id && item.userId === userId && !item.deletedAt);
+    if (!found) throw new FormFieldError(field, REF_DENIED);
+    return found;
   }
 
   async getExtraction(documentId: string): Promise<Extraction | null> {
@@ -854,6 +1149,6 @@ export class MemoryDatabase implements Database {
   }
 }
 
-export function createMemoryDatabase(): Database {
+export function createMemoryDatabase(): MemoryDatabase {
   return new MemoryDatabase();
 }
