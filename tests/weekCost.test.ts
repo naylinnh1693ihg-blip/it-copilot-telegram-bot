@@ -4,7 +4,7 @@ import type { LlmClient } from "../src/services/grok/client.js";
 import { handleText } from "../src/services/assistant/handleText.js";
 import { parseLocalIntent } from "../src/services/assistant/localIntent.js";
 import { toIso } from "../src/utils/time.js";
-import { NOW, owner, testDeps } from "./helpers.js";
+import { NOW, owner, testDeps, ZONE } from "./helpers.js";
 
 function throwingLlm(): LlmClient {
   return {
@@ -109,7 +109,7 @@ describe("week cost", () => {
     const { deps, db } = testDeps();
     deps.llm = throwingLlm();
     const user = await owner(db);
-    const now = DateTime.fromISO(NOW);
+    const now = DateTime.fromISO(NOW, { zone: ZONE });
     const monday = now.startOf("day").minus({ days: now.weekday - 1 });
     await db.recordUsage({
       userId: user.id,
