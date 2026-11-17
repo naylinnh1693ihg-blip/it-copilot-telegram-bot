@@ -3,7 +3,8 @@ import { adminAppEnabled, missingRuntimeSettings, parseEnv } from "./config/env.
 import { createSupabaseClient, SupabaseDatabase } from "./database/supabase.js";
 import { createSupabaseStorage } from "./services/documents/storage.js";
 import { createXaiClient } from "./services/grok/xai.js";
-import { ALLOWED_UPDATES, createBot, telegramWebhook, webhookOptions } from "./bot/index.js";
+import { ALLOWED_UPDATES, createBot, telegramWebhook } from "./bot/index.js";
+import { ensureWebhook } from "./bot/webhookGuard.js";
 import { inlineButtons } from "./bot/keyboards/menus.js";
 import { syncBotProfile } from "./bot/profile.js";
 import { createHttpApp } from "./routes/http.js";
@@ -83,12 +84,17 @@ async function main(): Promise<void> {
   });
 
   if (env.TELEGRAM_MODE === "webhook") {
-    const endpoint = `${env.PUBLIC_BASE_URL.replace(/\/$/, "")}/telegram/webhook`;
-    await bot.api.setWebhook(endpoint, webhookOptions(env));
-    logger.info(
-      { event: "webhook_set", endpoint, maxConnections: env.TELEGRAM_WEBHOOK_MAX_CONNECTIONS },
-      "telegram webhook registered",
-    );
+    const state = await ensureWebhook(bot.api, env, logger);
+    if (state === "ok") logger.info({ event: "webhook_set" }, "telegram webhook already registered");
+    const timer = setInterval(() => {
+      void ensureWebhook(bot.api, env, logger).catch((error: unknown) => {
+        logger.error(
+          { event: "webhook_restore_failed", message: error instanceof Error ? error.message : "error" },
+          "could not check the telegram webhook",
+        );
+      });
+    }, 60_000);
+    timer.unref?.();
   } else {
     void bot.start({
       allowed_updates: ALLOWED_UPDATES,
