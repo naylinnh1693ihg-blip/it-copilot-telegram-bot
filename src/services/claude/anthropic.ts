@@ -480,16 +480,24 @@ function logSearchErrors(content: BetaContentBlock[], logger?: AppLogger): void 
   }
 }
 
+/** Anthropic's own reason, for logs only: "type: message (request id)". Never shown in Telegram; contains no key. */
+function apiDetail(error: InstanceType<typeof Anthropic.APIError>): string {
+  const parts = [error.type, error.apiMessage].filter(Boolean).join(": ");
+  const request = error.requestID ? ` (request ${error.requestID})` : "";
+  return `${parts || "no detail"}${request}`.slice(0, 400);
+}
+
 /** Maps SDK errors to ClaudeError, most specific class first. A stop is reported as GenerationStoppedError. */
 export function asClaudeError(error: unknown, signal?: AbortSignal): Error {
   if (error instanceof GenerationStoppedError) return error;
   if (signal?.aborted || error instanceof Anthropic.APIUserAbortError) return new GenerationStoppedError();
   if (error instanceof ClaudeError) return error;
   if (error instanceof Anthropic.RateLimitError) {
-    return new ClaudeError("Claude rate limit reached.", true, 429, { retryAfterMs: retryAfterFromHeaders(error.headers) });
+    return new ClaudeError(`Claude rate limit reached (429): ${apiDetail(error)}`, true, 429, { retryAfterMs: retryAfterFromHeaders(error.headers) });
   }
   if (error instanceof Anthropic.InternalServerError) {
-    return new ClaudeError(`Claude server error (${error.status}).`, true, error.status ?? 500);
+    const status = error.status ?? 500;
+    return new ClaudeError(`Claude server error (${status}): ${apiDetail(error)}`, true, status);
   }
   if (error instanceof Anthropic.APIConnectionTimeoutError) {
     return new ClaudeError("Claude request timed out.", true, 0, { kind: "transport" });
@@ -497,12 +505,12 @@ export function asClaudeError(error: unknown, signal?: AbortSignal): Error {
   if (error instanceof Anthropic.APIConnectionError) {
     return new ClaudeError("Could not connect to Claude.", true, 0, { kind: "transport" });
   }
-  if (error instanceof Anthropic.BadRequestError) return new ClaudeError("Claude rejected the request.", false, 400);
-  if (error instanceof Anthropic.AuthenticationError) return new ClaudeError("Claude rejected the API key.", false, 401);
-  if (error instanceof Anthropic.PermissionDeniedError) return new ClaudeError("Claude denied the request.", false, 403);
+  if (error instanceof Anthropic.BadRequestError) return new ClaudeError(`Claude rejected the request (400): ${apiDetail(error)}`, false, 400);
+  if (error instanceof Anthropic.AuthenticationError) return new ClaudeError(`Claude rejected the API key (401): ${apiDetail(error)}`, false, 401);
+  if (error instanceof Anthropic.PermissionDeniedError) return new ClaudeError(`Claude denied the request (403): ${apiDetail(error)}`, false, 403);
   if (error instanceof Anthropic.APIError) {
     const status = typeof error.status === "number" ? error.status : 0;
-    return new ClaudeError(`Claude request failed (${status}).`, status === 408 || status === 409 || status >= 500, status);
+    return new ClaudeError(`Claude request failed (${status}): ${apiDetail(error)}`, status === 408 || status === 409 || status >= 500, status);
   }
   return new ClaudeError("Claude request failed.", false, 0);
 }
