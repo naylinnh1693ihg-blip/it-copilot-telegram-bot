@@ -4,6 +4,8 @@ This is a single Node.js process. Do not split it into microservices.
 
 - `src/bot` talks to Telegram through grammY.
 - `src/services/grok` is the only code that calls xAI. It uses the Responses API and `store: false`.
+- `src/services/claude` is the only code that calls Anthropic. It uses the official `@anthropic-ai/sdk`. Claude is the backup only and has no embeddings.
+- `src/services/llm/fallback.ts` decides which provider answers.
 - `src/database` is the only code that queries Supabase. Tests use `MemoryDatabase`; production uses `SupabaseDatabase`.
 - `src/jobs/processReminders.ts` is the only reminder sender. Postgres `claim_due_reminders` uses `FOR UPDATE SKIP LOCKED`.
 - Uploaded files and note text are data. Never put them in a system prompt without the untrusted wrapper.

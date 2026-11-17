@@ -21,6 +21,7 @@
     "dev:admin": "vite --config web/admin/vite.config.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.10.0",
     "@grammyjs/auto-retry": "^2.0.2",
     "@napi-rs/canvas": "^0.1.80",
     "@prometheus-io/client": "^0.16.1",

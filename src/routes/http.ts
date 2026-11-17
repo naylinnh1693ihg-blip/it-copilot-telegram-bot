@@ -49,7 +49,9 @@ export function createHttpApp(
     res.status(ping.ok ? 200 : 503).json({
       ok: ping.ok,
       database: ping.ok ? "reachable" : "not reachable",
-      grok: deps.llm ? "configured" : "not configured",
+      grok: deps.llm && deps.env.XAI_API_KEY ? "configured" : "not configured",
+      claude: deps.llm && deps.env.ANTHROPIC_API_KEY ? "configured" : "not configured",
+      ai: deps.llm?.state?.().active ?? (deps.llm ? (deps.env.XAI_API_KEY ? "grok" : "claude") : "none"),
     });
   });
 

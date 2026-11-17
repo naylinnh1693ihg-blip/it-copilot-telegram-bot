@@ -1,4 +1,4 @@
-import { GenerationStoppedError, GrokError } from "../../utils/errors.js";
+import { GenerationStoppedError, GrokError, retryAfterFromHeaders } from "../../utils/errors.js";
 import { currentAbortSignal } from "./abort.js";
 import { createPreviewGate } from "./streamPreview.js";
 
@@ -6,6 +6,23 @@ export interface LlmResult {
   text: string;
   inputTokens: number;
   outputTokens: number;
+  /** The model that actually answered. Record this in ai_usage, not the configured model. */
+  model?: string;
+}
+
+/**
+ * How hard the model should think. Grok ignores it. Claude sends it as output_config.effort:
+ * low for intent routing and short chat, medium for RAG answers and summaries, high for document analysis.
+ */
+export type LlmEffort = "low" | "medium" | "high";
+
+/** Which provider answers right now. Only the fallback client reports this. */
+export interface LlmProviderState {
+  active: "grok" | "claude";
+  /** ISO time when calls go back to Grok. Present while the Claude backup is active. */
+  until?: string;
+  /** Why the backup is active: rate_limited, billing, server_error, or unreachable. */
+  reason?: string;
 }
 
 export interface LlmRequestPolicy {
@@ -36,6 +53,7 @@ export interface LlmClient {
     retry?: boolean;
     /** Cancels the request (Telegram Stop button). Defaults to the ambient signal from withAbortSignal. */
     signal?: AbortSignal;
+    effort?: LlmEffort;
   }): Promise<LlmResult>;
   completeText(input: {
     system: string;
@@ -43,6 +61,7 @@ export interface LlmClient {
     webSearch?: boolean;
     images?: Array<{ mime: "image/jpeg" | "image/png"; base64: string }>;
     signal?: AbortSignal;
+    effort?: LlmEffort;
   }): Promise<LlmResult>;
   completeWithTools?(input: {
     system: string;
@@ -51,6 +70,7 @@ export interface LlmClient {
     /** Full Responses API input for a follow-up turn. The first turn builds input from system and user. */
     input?: unknown[];
     signal?: AbortSignal;
+    effort?: LlmEffort;
   }): Promise<AgentTurn>;
   embed?(input: { texts: string[]; model: string; dimensions: number }): Promise<{ vectors: number[][]; inputTokens: number }>;
   streamStructured?(input: {
@@ -66,6 +86,7 @@ export interface LlmClient {
     timeoutMs?: number;
     retry?: boolean;
     signal?: AbortSignal;
+    effort?: LlmEffort;
   }): Promise<LlmResult>;
   /** Plain-text stream. Previews are throttled. The returned text is the full answer. */
   streamText?(input: {
@@ -75,7 +96,10 @@ export interface LlmClient {
     minIntervalMs?: number;
     onDelta?: (snapshot: string) => Promise<void> | void;
     signal?: AbortSignal;
+    effort?: LlmEffort;
   }): Promise<LlmResult>;
+  /** Present on the fallback client only. Read-only; used by /status. */
+  state?(): LlmProviderState;
 }
 
 export interface ResponseStreamEvent {
@@ -142,7 +166,14 @@ function asGrokError(error: unknown): GrokError {
   const status = statusOf(error);
   const retryable = status === 0 || status === 408 || status === 409 || status === 429 || status >= 500;
   const message = error instanceof Error ? error.message : "Grok request failed";
-  return new GrokError(message, retryable, status);
+  // No HTTP status means the request never got an answer: a connection failure or a timeout.
+  const kind = status === 0 || status === 408 ? "transport" : "status";
+  const retryAfterMs = retryAfterFromHeaders((error as { headers?: unknown } | null)?.headers);
+  return new GrokError(message, retryable, status, { kind, retryAfterMs });
+}
+
+function modelOf(body: Record<string, unknown>): string | undefined {
+  return typeof body.model === "string" ? body.model : undefined;
 }
 
 export function createResilientClient(options: {
@@ -176,6 +207,7 @@ export function createResilientClient(options: {
           text,
           inputTokens: response.usage?.input_tokens ?? 0,
           outputTokens: response.usage?.output_tokens ?? 0,
+          model: modelOf(body),
         };
       } catch (error) {
         stopIfAborted(signal);
@@ -263,7 +295,7 @@ export function createResilientClient(options: {
           throw new GrokError("The model returned invalid JSON.", true);
         }
       }
-      return { text, inputTokens, outputTokens };
+      return { text, inputTokens, outputTokens, model: modelOf(request) };
     };
 
     try {
@@ -351,6 +383,7 @@ export function createResilientClient(options: {
             functionCalls,
             inputTokens: response.usage?.input_tokens ?? 0,
             outputTokens: response.usage?.output_tokens ?? 0,
+            model: modelOf(request),
           };
         } catch (error) {
           stopIfAborted(signal);

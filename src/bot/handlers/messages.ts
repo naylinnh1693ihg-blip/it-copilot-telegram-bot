@@ -1,4 +1,5 @@
 import type { Context } from "grammy";
+import { DateTime } from "luxon";
 import type { Deps } from "../../app/deps.js";
 import type { User } from "../../types/models.js";
 import type { AppLogger } from "../../utils/logger.js";
@@ -182,12 +183,37 @@ export async function sendReply(
   }
 }
 
+const FALLBACK_REASONS: Record<string, string> = {
+  rate_limited: "Grok rate-limited",
+  billing: "Grok out of credit",
+  server_error: "Grok server errors",
+  unreachable: "Grok unreachable",
+};
+
+/** Model names and provider state only. Never keys. */
+export function aiStatusLine(deps: Deps): string {
+  if (!deps.llm) return "AI: not configured";
+  const grok = !!deps.env.XAI_API_KEY;
+  const claude = !!deps.env.ANTHROPIC_API_KEY;
+  if (grok && claude) {
+    const state = deps.llm.state?.();
+    if (state?.active === "claude") {
+      const until = state.until ? DateTime.fromISO(state.until).setZone(deps.env.APP_TIMEZONE).toFormat("HH:mm") : "";
+      const why = FALLBACK_REASONS[state.reason ?? ""] ?? "Grok unavailable";
+      return `AI: Grok (${deps.env.XAI_MODEL}) · Claude backup (${deps.env.CLAUDE_MODEL}) active${until ? ` until ${until}` : ""} (${why})`;
+    }
+    return `AI: Grok (primary, ${deps.env.XAI_MODEL}) · Claude backup (${deps.env.CLAUDE_MODEL}): ready`;
+  }
+  if (claude) return `AI: Claude (${deps.env.CLAUDE_MODEL}) · Grok not configured, so search uses keywords only`;
+  return `AI: Grok (${deps.env.XAI_MODEL}) · no Claude backup`;
+}
+
 export function buildStatus(deps: Deps, database: "reachable" | "not reachable"): string {
   return [
     "IT Work Copilot",
     `Time zone: ${deps.env.APP_TIMEZONE}`,
     `Database: ${database}`,
-    deps.llm ? `Grok: configured (${deps.env.XAI_MODEL})` : "Grok: not configured",
+    aiStatusLine(deps),
     `Telegram mode: ${deps.env.TELEGRAM_MODE}`,
     `Reminder worker: ${deps.env.REMINDER_POLL_MS > 0 ? `every ${deps.env.REMINDER_POLL_MS} ms` : "HTTP endpoint only"}`,
   ].join("\n");

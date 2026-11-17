@@ -3,6 +3,8 @@ import { adminAppEnabled, missingRuntimeSettings, parseEnv } from "./config/env.
 import { createSupabaseClient, SupabaseDatabase } from "./database/supabase.js";
 import { createSupabaseStorage } from "./services/documents/storage.js";
 import { createXaiClient } from "./services/grok/xai.js";
+import { createClaudeClient } from "./services/claude/anthropic.js";
+import { selectLlmClient } from "./services/llm/fallback.js";
 import { ALLOWED_UPDATES, createBot, telegramWebhook } from "./bot/index.js";
 import { ensureWebhook } from "./bot/webhookGuard.js";
 import { inlineButtons } from "./bot/keyboards/menus.js";
@@ -38,19 +40,33 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const clock = zoneClock(env.APP_TIMEZONE);
+  const grok = env.XAI_API_KEY
+    ? createXaiClient({
+        apiKey: env.XAI_API_KEY,
+        baseUrl: env.XAI_BASE_URL,
+        model: env.XAI_MODEL,
+        timeoutMs: env.XAI_TIMEOUT_MS,
+      })
+    : null;
+  const claude = env.ANTHROPIC_API_KEY
+    ? createClaudeClient({
+        apiKey: env.ANTHROPIC_API_KEY,
+        model: env.CLAUDE_MODEL,
+        timeoutMs: env.CLAUDE_TIMEOUT_MS,
+        logger,
+      })
+    : null;
+  if (!grok && claude) {
+    logger.warn({ event: "claude_only" }, "XAI_API_KEY is empty. Claude answers alone; embeddings are off, so search uses keywords only.");
+  }
+
   const deps: Deps = {
     env,
     db,
-    clock: zoneClock(env.APP_TIMEZONE),
+    clock,
     logger,
-    llm: env.XAI_API_KEY
-      ? createXaiClient({
-          apiKey: env.XAI_API_KEY,
-          baseUrl: env.XAI_BASE_URL,
-          model: env.XAI_MODEL,
-          timeoutMs: env.XAI_TIMEOUT_MS,
-        })
-      : null,
+    llm: selectLlmClient({ grok, claude, logger, clock, cooldownMs: env.LLM_FALLBACK_COOLDOWN_MS }),
     storage: createSupabaseStorage(client),
   };
 

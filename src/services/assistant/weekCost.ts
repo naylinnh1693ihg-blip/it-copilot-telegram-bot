@@ -2,7 +2,7 @@ import { DateTime } from "luxon";
 import type { Deps } from "../../app/deps.js";
 import type { UsageSlice } from "../../database/types.js";
 import type { User } from "../../types/models.js";
-import { costForUsage } from "../grok/prices.js";
+import { costForUsage, isClaudeModel } from "../grok/prices.js";
 import { toIso } from "../../utils/time.js";
 
 /**
@@ -46,7 +46,21 @@ export function formatWeekCost(rows: UsageSlice[]): string {
   const total = known.reduce((sum, item) => sum + (item.costUsd ?? 0), 0);
   const totalLine = known.length === 0 ? "Total: price unknown" : `Total: ${formatUsd(total)}`;
   const note = unknown > 0 && known.length > 0 ? "\nTotal excludes models with an unknown price." : "";
-  return `AI cost this week:\n${totalLine}\n\n${lines.join("\n")}${note}`;
+  return `AI cost this week:\n${totalLine}${providerLine(grouped)}\n\n${lines.join("\n")}${note}`;
+}
+
+/** Grok (xAI, including embeddings) and Claude subtotals. Shown only when the Claude backup answered this week. */
+function providerLine(grouped: Map<string, { costUsd: number | null }>): string {
+  const models = [...grouped.keys()];
+  if (!models.some(isClaudeModel)) return "";
+  const subtotal = (claude: boolean) => {
+    const rows = models.filter((model) => isClaudeModel(model) === claude).map((model) => grouped.get(model)?.costUsd ?? null);
+    if (rows.length === 0) return formatUsd(0);
+    const known = rows.filter((cost): cost is number => cost !== null);
+    if (known.length === 0) return "price unknown";
+    return formatUsd(known.reduce((sum, cost) => sum + cost, 0));
+  };
+  return `\nGrok: ${subtotal(false)} · Claude: ${subtotal(true)}`;
 }
 
 function formatUsd(amount: number): string {

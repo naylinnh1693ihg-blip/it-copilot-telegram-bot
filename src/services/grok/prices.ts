@@ -42,6 +42,42 @@ export const MODEL_PRICES: Record<string, ModelPrice> = {
   "grok-4.20-multi-agent-0309": LONG_CONTEXT,
 };
 
+/**
+ * Claude prices, USD per 1 million tokens (Anthropic list prices, Nov 2026). Claude is the backup provider;
+ * these rows exist so "Week cost" shows it separately. Opus and Sonnet have no long-context surcharge.
+ * Claude Haiku 5.5's rate applies to prompts up to 100K tokens. claude-opus-5 and claude-opus-4-8 are here because
+ * Anthropic's server-side refusal fallback can answer with them, and ai_usage records the model that answered.
+ */
+function flat(input: number, output: number): ModelPrice {
+  return {
+    inputUsdPerMillion: input,
+    outputUsdPerMillion: output,
+    longContextInputTokens: Number.POSITIVE_INFINITY,
+    longInputUsdPerMillion: input,
+    longOutputUsdPerMillion: output,
+  };
+}
+
+export const CLAUDE_PRICES: Record<string, ModelPrice> = {
+  "claude-opus-5-5": flat(4, 20),
+  "claude-sonnet-5-5": flat(2, 10),
+  "claude-haiku-5-5": {
+    inputUsdPerMillion: 0.1,
+    outputUsdPerMillion: 0.5,
+    longContextInputTokens: 100_000,
+    longInputUsdPerMillion: 0.5,
+    longOutputUsdPerMillion: 2.5,
+  },
+  "claude-opus-5": flat(5, 25),
+  "claude-opus-4-8": flat(5, 25),
+};
+
+Object.assign(MODEL_PRICES, CLAUDE_PRICES);
+
+export function isClaudeModel(model: string): boolean {
+  return model.startsWith("claude-");
+}
+
 export function costForUsage(model: string, inputTokens: number, outputTokens: number): number | null {
   const price = MODEL_PRICES[model];
   if (!price) return null;

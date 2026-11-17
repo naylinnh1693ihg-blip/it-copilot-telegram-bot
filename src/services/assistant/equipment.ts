@@ -9,6 +9,7 @@ import { toIso } from "../../utils/time.js";
 import type { Intent } from "../../types/intent.js";
 import type { Reply } from "./execute.js";
 import { copyButtonsFor } from "./copyButtons.js";
+import { usageFields } from "../llm/usage.js";
 
 const TYPE_LABEL: Record<EquipmentKind, string> = {
   printer: "Printer",
@@ -326,13 +327,10 @@ async function extractEquipment(
   });
   await deps.db.recordUsage({
     userId: user.id,
-    model: deps.env.XAI_MODEL,
     purpose: "equipment_extract",
     inputTokens: result.inputTokens,
     outputTokens: result.outputTokens,
-    estimatedUsd:
-      (result.inputTokens / 1_000_000) * deps.env.XAI_INPUT_USD_PER_MILLION +
-      (result.outputTokens / 1_000_000) * deps.env.XAI_OUTPUT_USD_PER_MILLION,
+    ...usageFields(deps.env, result, deps.env.XAI_MODEL),
     createdAt: toIso(deps.clock.now()),
   }).catch(() => undefined);
   let parsed: z.infer<typeof ExtractedEquipmentSchema>;

@@ -26,6 +26,7 @@ import { currentAbortSignal } from "../grok/abort.js";
 import { reminderDelivery } from "../reminders/delivery.js";
 import { matchingTableRows } from "../rag/table.js";
 import { escapeRichBlock, escapeRichInline, richTable, RICH_MAX_CHARS } from "../../utils/richMarkdown.js";
+import { usageFields } from "../llm/usage.js";
 
 export interface Reply {
   text: string;
@@ -134,18 +135,15 @@ async function recordUsage(
   deps: Deps,
   user: User,
   purpose: string,
-  result: { inputTokens: number; outputTokens: number },
+  result: { inputTokens: number; outputTokens: number; model?: string },
 ): Promise<void> {
   try {
     await deps.db.recordUsage({
       userId: user.id,
-      model: deps.env.XAI_MODEL,
       purpose,
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
-      estimatedUsd:
-        (result.inputTokens / 1_000_000) * deps.env.XAI_INPUT_USD_PER_MILLION +
-        (result.outputTokens / 1_000_000) * deps.env.XAI_OUTPUT_USD_PER_MILLION,
+      ...usageFields(deps.env, result, deps.env.XAI_MODEL),
       createdAt: toIso(deps.clock.now()),
     });
   } catch (error) {

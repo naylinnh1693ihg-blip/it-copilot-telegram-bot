@@ -27,6 +27,11 @@ services:
         value: grok-4.7
       - key: XAI_BASE_URL
         value: https://api.x.ai/v1
+      # Claude backup. Only used when ANTHROPIC_API_KEY is set.
+      - key: CLAUDE_MODEL
+        value: claude-opus-5-5
+      - key: LLM_FALLBACK_COOLDOWN_MS
+        value: "300000"
       - key: LOG_LEVEL
         value: info
       - key: MAX_UPLOAD_BYTES
@@ -42,6 +47,9 @@ services:
       - key: CRON_SECRET
         sync: false
       - key: PUBLIC_BASE_URL
+        sync: false
+      # Optional. Empty means no Claude backup.
+      - key: ANTHROPIC_API_KEY
         sync: false
       - key: SUPABASE_URL
         sync: false
