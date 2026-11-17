@@ -1,13 +1,18 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { IntentSchema, type Intent } from "../types/intent.js";
+import { DUPLICATE_EMAIL, DUPLICATE_URL } from "../forms/conflicts.js";
 import type {
   AdminSession,
   AuditEntry,
+  Contact,
   ConversationTurn,
   DocumentRecord,
   Equipment,
   EquipmentKind,
+  EquipmentStatus,
+  LinkCategory,
   Memory,
+  SavedLink,
   MemorySourceType,
   MemoryType,
   Extraction,
@@ -23,15 +28,16 @@ import type {
   User,
   UserRole,
 } from "../types/models.js";
-import { DatabaseError } from "../utils/errors.js";
+import { DatabaseError, DuplicateFieldError } from "../utils/errors.js";
 import { redactString } from "../utils/text.js";
-import type { ChunkHit, ChunkSource, CompletedTask, Database, MemoryQuery, NewAdminLoginToken, NewAdminSession, NewDocument, NewEquipment, NewKnowledge, NewMemory, NewNote, NewReminder, NewTask, SavedTextHit, StoredChunk, UsageSlice } from "./types.js";
+import type { ChunkHit, ChunkSource, CompletedTask, Database, MemoryQuery, NewAdminLoginToken, NewAdminSession, NewContact, NewDocument, NewEquipment, NewKnowledge, NewMemory, NewNote, NewReminder, NewSavedLink, NewTask, SavedTextHit, StoredChunk, UsageSlice } from "./types.js";
 
 type Row = Record<string, unknown>;
 
 interface QueryError {
   message: string;
   code?: string;
+  details?: string;
 }
 
 function isRow(value: unknown): value is Row {
@@ -94,8 +100,36 @@ function completedTaskFrom(row: Row): CompletedTask {
 }
 
 function equipmentKind(value: string): EquipmentKind {
-  if (value === "printer" || value === "switch" || value === "access_point" || value === "other") return value;
+  if (
+    value === "printer" ||
+    value === "switch" ||
+    value === "access_point" ||
+    value === "laptop" ||
+    value === "monitor" ||
+    value === "server" ||
+    value === "other"
+  ) {
+    return value;
+  }
   throw new DatabaseError("Equipment type was not recognized.");
+}
+
+function equipmentStatus(value: string): EquipmentStatus {
+  if (value === "in_use" || value === "in_stock" || value === "in_repair" || value === "retired") return value;
+  throw new DatabaseError("Equipment status was not recognized.");
+}
+
+function linkCategory(value: string): LinkCategory {
+  if (value === "documentation" || value === "vendor_portal" || value === "tool" || value === "troubleshooting" || value === "other") return value;
+  throw new DatabaseError("Link category was not recognized.");
+}
+
+function duplicateField(error: QueryError): DuplicateFieldError | null {
+  if (error.code !== "23505") return null;
+  const blob = `${error.message} ${error.details ?? ""}`;
+  if (blob.includes("contacts_user_email")) return new DuplicateFieldError("email", DUPLICATE_EMAIL);
+  if (blob.includes("saved_links_user_url")) return new DuplicateFieldError("url", DUPLICATE_URL);
+  return null;
 }
 
 function equipmentFrom(row: Row): Equipment {
@@ -107,9 +141,48 @@ function equipmentFrom(row: Row): Equipment {
     kind: equipmentKind(text(row, "kind")),
     location: text(row, "location"),
     ipAddress: text(row, "ip_address"),
+    serialNumber: text(row, "serial_number"),
+    status: equipmentStatus(text(row, "status")),
+    purchaseDate: textOrNull(row, "purchase_date"),
+    warrantyEnd: textOrNull(row, "warranty_end"),
     notes: text(row, "notes"),
     sourceNoteId: textOrNull(row, "source_note_id"),
     sourceDocumentId: textOrNull(row, "source_document_id"),
+    createdAt: text(row, "created_at"),
+    updatedAt: text(row, "updated_at"),
+    deletedAt: textOrNull(row, "deleted_at"),
+  };
+}
+
+function contactFrom(row: Row): Contact {
+  return {
+    id: text(row, "id"),
+    userId: text(row, "user_id"),
+    contactNumber: integer(row, "contact_number"),
+    fullName: text(row, "full_name"),
+    email: text(row, "email"),
+    phone: text(row, "phone"),
+    department: text(row, "department"),
+    jobTitle: text(row, "job_title"),
+    location: text(row, "location"),
+    telegramUsername: text(row, "telegram_username"),
+    notes: text(row, "notes"),
+    createdAt: text(row, "created_at"),
+    updatedAt: text(row, "updated_at"),
+    deletedAt: textOrNull(row, "deleted_at"),
+  };
+}
+
+function savedLinkFrom(row: Row): SavedLink {
+  return {
+    id: text(row, "id"),
+    userId: text(row, "user_id"),
+    linkNumber: integer(row, "link_number"),
+    url: text(row, "url"),
+    title: text(row, "title"),
+    category: linkCategory(text(row, "category")),
+    tags: textList(row, "tags"),
+    description: text(row, "description"),
     createdAt: text(row, "created_at"),
     updatedAt: text(row, "updated_at"),
     deletedAt: textOrNull(row, "deleted_at"),
@@ -311,7 +384,7 @@ export class SupabaseDatabase implements Database {
 
   private raise(error: QueryError | null): void {
     if (!error) return;
-    throw new DatabaseError(redactString(error.message));
+    throw new DatabaseError(redactString(error.message), error.code);
   }
 
   private async preferenceTime(userId: string): Promise<string | null> {
@@ -370,6 +443,13 @@ export class SupabaseDatabase implements Database {
 
   async findUserById(id: string): Promise<User | null> {
     const { data, error } = await this.client.from("users").select("*").eq("id", id).maybeSingle();
+    this.raise(error);
+    if (!isRow(data)) return null;
+    return this.hydrate(data);
+  }
+
+  async findUserByTelegram(telegramUserId: number): Promise<User | null> {
+    const { data, error } = await this.client.from("users").select("*").eq("telegram_user_id", telegramUserId).maybeSingle();
     this.raise(error);
     if (!isRow(data)) return null;
     return this.hydrate(data);
@@ -1028,6 +1108,10 @@ export class SupabaseDatabase implements Database {
         kind: input.kind,
         location: input.location,
         ip_address: input.ipAddress,
+        serial_number: input.serialNumber ?? "",
+        status: input.status ?? "in_use",
+        purchase_date: input.purchaseDate ?? null,
+        warranty_end: input.warrantyEnd ?? null,
         notes: input.notes,
         source_note_id: input.sourceNoteId,
         source_document_id: input.sourceDocumentId,
@@ -1049,6 +1133,10 @@ export class SupabaseDatabase implements Database {
         kind: item.kind,
         location: item.location,
         ip_address: item.ipAddress,
+        serial_number: item.serialNumber,
+        status: item.status,
+        purchase_date: item.purchaseDate,
+        warranty_end: item.warrantyEnd,
         notes: item.notes,
         source_note_id: item.sourceNoteId,
         source_document_id: item.sourceDocumentId,
@@ -1073,6 +1161,83 @@ export class SupabaseDatabase implements Database {
       .order("equipment_number", { ascending: true });
     this.raise(error);
     return rows(data).map(equipmentFrom);
+  }
+
+  async insertContact(input: NewContact): Promise<Contact> {
+    const contactNumber = await this.allocate(input.userId, "contact");
+    const { data, error } = await this.client
+      .from("contacts")
+      .insert({
+        user_id: input.userId,
+        contact_number: contactNumber,
+        full_name: input.fullName,
+        email: input.email,
+        phone: input.phone,
+        department: input.department,
+        job_title: input.jobTitle,
+        location: input.location,
+        telegram_username: input.telegramUsername,
+        notes: input.notes,
+        created_at: input.createdAt,
+        updated_at: input.createdAt,
+      })
+      .select("*")
+      .single();
+    if (error) {
+      const duplicate = duplicateField(error);
+      if (duplicate) throw duplicate;
+      this.raise(error);
+    }
+    if (!isRow(data)) throw new DatabaseError("Could not save the contact.");
+    return contactFrom(data);
+  }
+
+  async listContacts(userId: string): Promise<Contact[]> {
+    const { data, error } = await this.client
+      .from("contacts")
+      .select("*")
+      .eq("user_id", userId)
+      .is("deleted_at", null)
+      .order("created_at", { ascending: false });
+    this.raise(error);
+    return rows(data).map(contactFrom);
+  }
+
+  async insertSavedLink(input: NewSavedLink): Promise<SavedLink> {
+    const linkNumber = await this.allocate(input.userId, "link");
+    const { data, error } = await this.client
+      .from("saved_links")
+      .insert({
+        user_id: input.userId,
+        link_number: linkNumber,
+        url: input.url,
+        title: input.title,
+        category: input.category,
+        tags: input.tags,
+        description: input.description,
+        created_at: input.createdAt,
+        updated_at: input.createdAt,
+      })
+      .select("*")
+      .single();
+    if (error) {
+      const duplicate = duplicateField(error);
+      if (duplicate) throw duplicate;
+      this.raise(error);
+    }
+    if (!isRow(data)) throw new DatabaseError("Could not save the link.");
+    return savedLinkFrom(data);
+  }
+
+  async listSavedLinks(userId: string): Promise<SavedLink[]> {
+    const { data, error } = await this.client
+      .from("saved_links")
+      .select("*")
+      .eq("user_id", userId)
+      .is("deleted_at", null)
+      .order("created_at", { ascending: false });
+    this.raise(error);
+    return rows(data).map(savedLinkFrom);
   }
 
   async getExtraction(documentId: string): Promise<Extraction | null> {

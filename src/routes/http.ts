@@ -1,9 +1,12 @@
+import path from "node:path";
 import express, { type RequestHandler } from "express";
 import type { Deps } from "../app/deps.js";
 import { adminAppEnabled } from "../config/env.js";
 import { processDueReminders } from "../jobs/processReminders.js";
 import { createRateLimiter, secretsMatch } from "../utils/security.js";
 import { createAdminRouter } from "./admin/index.js";
+import { sendFormDocument } from "./formPage.js";
+import { createMiniAppApi } from "./forms.js";
 import { createMetrics } from "./metrics.js";
 import { redactString } from "../utils/text.js";
 
@@ -87,6 +90,19 @@ export function createHttpApp(
       next();
     }, options.webhook);
   }
+
+  app.use("/forms", express.static(path.resolve(process.cwd(), "public/forms"), { index: false, maxAge: "1h" }));
+  app.use(
+    "/api",
+    createMiniAppApi(
+      deps,
+      options.sendTelegram ? (chatId, text) => options.sendTelegram!(chatId, text) : undefined,
+    ),
+  );
+  app.get("/miniapp/:formId", (req, res) => {
+    const formId = typeof req.params.formId === "string" ? req.params.formId : "";
+    sendFormDocument(res, { formId, surface: "miniapp", apiBase: "/api" });
+  });
 
   // Mounted only when enabled. Otherwise /admin falls through to Express's 404.
   if (adminAppEnabled(deps.env)) {

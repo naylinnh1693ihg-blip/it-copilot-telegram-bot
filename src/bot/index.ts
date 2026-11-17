@@ -23,6 +23,7 @@ import { tasksPhrase } from "./commands/arguments.js";
 import { buildStatus, createLiveAnalysis, currentUser, ephemeralTarget, keepChatAction, rememberUser, type ChatAction, sendReply } from "./handlers/messages.js";
 import { applyReminderButton, parseReminderCallback } from "../services/reminders/buttons.js";
 import { issueLoginLink, LOGIN_TOKEN_MINUTES } from "../services/admin/auth.js";
+import { sendAddMenu } from "./addForms.js";
 
 /**
  * Update types the bot handles. Used for both setWebhook and long polling, so Telegram
@@ -319,6 +320,7 @@ export function createBot(token: string, deps: Deps): Bot {
   bot.command("remember", (ctx) => runText(deps, ctx, `Remember that ${String(ctx.match).trim()}`));
   bot.command("memories", (ctx) => runText(deps, ctx, "list memories"));
   bot.command("forget", (ctx) => runText(deps, ctx, `forget ${String(ctx.match).trim()}`));
+  bot.command("add", (ctx) => sendAddMenu(deps, ctx));
   bot.command("admin", async (ctx) => {
     // A one-time sign-in link must never be posted where other people can open it.
     if (ctx.chat.type !== "private") {
@@ -356,6 +358,11 @@ export function createBot(token: string, deps: Deps): Bot {
           await ctx.reply(outcome.text).catch(() => undefined);
         }
       }
+      return;
+    }
+    if (data === "m:add") {
+      await ctx.answerCallbackQuery();
+      await sendAddMenu(deps, ctx);
       return;
     }
     await ctx.answerCallbackQuery();

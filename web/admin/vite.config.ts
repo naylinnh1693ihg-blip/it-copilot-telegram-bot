@@ -28,6 +28,10 @@ export default defineConfig({
           });
         },
       },
+      "/admin/equipment": { target: "http://localhost:3000" },
+      "/admin/contacts": { target: "http://localhost:3000" },
+      "/admin/links": { target: "http://localhost:3000" },
+      "/forms": { target: "http://localhost:3000" },
     },
   },
 });

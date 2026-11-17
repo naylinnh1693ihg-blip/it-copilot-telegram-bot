@@ -9,7 +9,19 @@ export function mainMenu(): InlineKeyboard {
     .text("Notes", "m:notes")
     .row()
     .text("Documents", "m:docs")
-    .text("Summary", "m:summary");
+    .text("Summary", "m:summary")
+    .row()
+    .text("Add", "m:add");
+}
+
+/** Three Mini App buttons. `baseUrl` must already be https. */
+export function addFormKeyboard(baseUrl: string): InlineKeyboard {
+  return new InlineKeyboard()
+    .webApp("Equipment", `${baseUrl}/miniapp/equipment`)
+    .row()
+    .webApp("Contact", `${baseUrl}/miniapp/contact`)
+    .row()
+    .webApp("Website link", `${baseUrl}/miniapp/link`);
 }
 
 export function confirmKeyboard(): InlineKeyboard {

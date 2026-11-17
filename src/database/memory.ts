@@ -3,11 +3,13 @@ import { IntentSchema, type Intent } from "../types/intent.js";
 import type {
   AdminSession,
   AuditEntry,
+  Contact,
   ConversationTurn,
   Delivery,
   DocumentRecord,
   Equipment,
   Memory,
+  SavedLink,
   Extraction,
   KnowledgeEntry,
   Note,
@@ -19,7 +21,9 @@ import type {
   UserRole,
 } from "../types/models.js";
 import { SAVED_TEXT_MIN_SIMILARITY, cosineSimilarity, hybridScore, lexicalSimilarity, trigramWordSimilarity } from "./similarity.js";
-import type { ChunkHit, ChunkSource, CompletedTask, Database, MemoryQuery, NewAdminLoginToken, NewAdminSession, NewDocument, NewEquipment, NewKnowledge, NewMemory, NewNote, NewReminder, NewTask, SavedTextHit, StoredChunk, UsageSlice } from "./types.js";
+import { DuplicateFieldError } from "../utils/errors.js";
+import type { ChunkHit, ChunkSource, CompletedTask, Database, MemoryQuery, NewAdminLoginToken, NewAdminSession, NewContact, NewDocument, NewEquipment, NewKnowledge, NewMemory, NewNote, NewReminder, NewSavedLink, NewTask, SavedTextHit, StoredChunk, UsageSlice } from "./types.js";
+import { DUPLICATE_EMAIL, DUPLICATE_URL } from "../forms/conflicts.js";
 
 interface Counters {
   task: number;
@@ -29,7 +33,21 @@ interface Counters {
   document: number;
   equipment: number;
   memory: number;
+  contact: number;
+  link: number;
 }
+
+const EMPTY_COUNTERS: Counters = {
+  task: 0,
+  reminder: 0,
+  note: 0,
+  knowledge: 0,
+  document: 0,
+  equipment: 0,
+  memory: 0,
+  contact: 0,
+  link: 0,
+};
 
 function copy<T>(value: T): T {
   return structuredClone(value);
@@ -71,6 +89,8 @@ export class MemoryDatabase implements Database {
   private knowledge: KnowledgeEntry[] = [];
   private documents: DocumentRecord[] = [];
   private equipment: Equipment[] = [];
+  private contacts: Contact[] = [];
+  private savedLinks: SavedLink[] = [];
   private chunks: Array<StoredChunk & { userId: string }> = [];
   private extractions: Extraction[] = [];
   private updates = new Set<number>();
@@ -87,7 +107,7 @@ export class MemoryDatabase implements Database {
   }
 
   private nextCounter(userId: string, kind: keyof Counters): number {
-    const current = this.counters.get(userId) ?? { task: 0, reminder: 0, note: 0, knowledge: 0, document: 0, equipment: 0, memory: 0 };
+    const current = this.counters.get(userId) ?? { ...EMPTY_COUNTERS };
     current[kind] += 1;
     this.counters.set(userId, current);
     return current[kind];
@@ -120,12 +140,16 @@ export class MemoryDatabase implements Database {
       updatedAt: input.at,
     };
     this.users.push(user);
-    this.counters.set(user.id, { task: 0, reminder: 0, note: 0, knowledge: 0, document: 0, equipment: 0, memory: 0 });
+    this.counters.set(user.id, { ...EMPTY_COUNTERS });
     return copy(user);
   }
 
   async findUserById(id: string): Promise<User | null> {
     return copy(this.users.find((user) => user.id === id) ?? null);
+  }
+
+  async findUserByTelegram(telegramUserId: number): Promise<User | null> {
+    return copy(this.users.find((user) => user.telegramUserId === telegramUserId) ?? null);
   }
 
   async setUserRole(userId: string, role: UserRole): Promise<void> {
@@ -553,10 +577,22 @@ export class MemoryDatabase implements Database {
   async insertEquipment(input: NewEquipment): Promise<Equipment> {
     const item: Equipment = {
       id: randomUUID(),
+      userId: input.userId,
       equipmentNumber: this.nextCounter(input.userId, "equipment"),
-      deletedAt: null,
+      name: input.name,
+      kind: input.kind,
+      location: input.location,
+      ipAddress: input.ipAddress,
+      serialNumber: input.serialNumber ?? "",
+      status: input.status ?? "in_use",
+      purchaseDate: input.purchaseDate ?? null,
+      warrantyEnd: input.warrantyEnd ?? null,
+      notes: input.notes,
+      sourceNoteId: input.sourceNoteId,
+      sourceDocumentId: input.sourceDocumentId,
+      createdAt: input.createdAt,
       updatedAt: input.createdAt,
-      ...input,
+      deletedAt: null,
     };
     this.equipment.push(item);
     return copy(item);
@@ -571,6 +607,66 @@ export class MemoryDatabase implements Database {
 
   async listEquipment(userId: string): Promise<Equipment[]> {
     return this.equipment.filter((item) => item.userId === userId && !item.deletedAt).map((item) => copy(item));
+  }
+
+  async insertContact(input: NewContact): Promise<Contact> {
+    const email = input.email.trim().toLowerCase();
+    if (email && this.contacts.some((item) => item.userId === input.userId && !item.deletedAt && item.email.toLowerCase() === email)) {
+      throw new DuplicateFieldError("email", DUPLICATE_EMAIL);
+    }
+    const item: Contact = {
+      id: randomUUID(),
+      userId: input.userId,
+      contactNumber: this.nextCounter(input.userId, "contact"),
+      fullName: input.fullName,
+      email,
+      phone: input.phone,
+      department: input.department,
+      jobTitle: input.jobTitle,
+      location: input.location,
+      telegramUsername: input.telegramUsername,
+      notes: input.notes,
+      createdAt: input.createdAt,
+      updatedAt: input.createdAt,
+      deletedAt: null,
+    };
+    this.contacts.push(item);
+    return copy(item);
+  }
+
+  async listContacts(userId: string): Promise<Contact[]> {
+    return this.contacts
+      .filter((item) => item.userId === userId && !item.deletedAt)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.contactNumber - left.contactNumber)
+      .map((item) => copy(item));
+  }
+
+  async insertSavedLink(input: NewSavedLink): Promise<SavedLink> {
+    if (this.savedLinks.some((item) => item.userId === input.userId && !item.deletedAt && item.url === input.url)) {
+      throw new DuplicateFieldError("url", DUPLICATE_URL);
+    }
+    const item: SavedLink = {
+      id: randomUUID(),
+      userId: input.userId,
+      linkNumber: this.nextCounter(input.userId, "link"),
+      url: input.url,
+      title: input.title,
+      category: input.category,
+      tags: [...input.tags],
+      description: input.description,
+      createdAt: input.createdAt,
+      updatedAt: input.createdAt,
+      deletedAt: null,
+    };
+    this.savedLinks.push(item);
+    return copy(item);
+  }
+
+  async listSavedLinks(userId: string): Promise<SavedLink[]> {
+    return this.savedLinks
+      .filter((item) => item.userId === userId && !item.deletedAt)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt) || right.linkNumber - left.linkNumber)
+      .map((item) => copy(item));
   }
 
   async getExtraction(documentId: string): Promise<Extraction | null> {

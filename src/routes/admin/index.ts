@@ -16,6 +16,8 @@ import {
 import { createRateLimiter } from "../../utils/security.js";
 import { redactString } from "../../utils/text.js";
 import { registerAdminResourceRoutes } from "./resources.js";
+import { formIdForAdminPage, sendFormDocument } from "../formPage.js";
+import { registerFormHandlers } from "../forms.js";
 
 export const SESSION_COOKIE = "admin_session";
 const COOKIE_PATH = "/admin";
@@ -235,12 +237,44 @@ export function createAdminRouter(deps: Deps, options: AdminRouterOptions = {}):
   );
 
   registerAdminResourceRoutes(api, deps, (run) => handle(deps, run));
+  registerFormHandlers(api, deps, {
+    source: "admin",
+    currentUser: (res) => activeSession(res).user,
+    wrap: (run) => handle(deps, run),
+  });
 
   api.use((_req, res) => {
     res.status(404).json({ error: "Not found." });
   });
 
   router.use("/api", api);
+
+  for (const page of ["equipment", "contacts", "links"]) {
+    router.get(`/${page}`, (req, res) => {
+      const sessionId = sessionIdFrom(req);
+      authenticate(deps, sessionId)
+        .then((active) => {
+          if (!active || !sessionId) {
+            res.redirect("/admin/login");
+            return;
+          }
+          const formId = formIdForAdminPage(page);
+          if (!formId) {
+            res.status(404).type("text/plain").send("That page does not exist.");
+            return;
+          }
+          setSessionCookie(req, deps, res, sessionId);
+          sendFormDocument(res, { formId, surface: "admin", apiBase: "/admin/api" });
+        })
+        .catch((error: unknown) => {
+          deps.logger.error(
+            { event: "admin_page_failed", message: redactString(error instanceof Error ? error.message : "error") },
+            "admin page failed",
+          );
+          if (!res.headersSent) res.status(500).type("text/plain").send("Could not open this page.");
+        });
+    });
+  }
 
   const staticDir = options.staticDir ?? path.resolve(process.cwd(), "dist/admin");
   router.use(express.static(staticDir, { index: false, fallthrough: true, maxAge: "1h" }));

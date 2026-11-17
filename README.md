@@ -52,7 +52,23 @@ Fill in `.env` as you complete the steps below. `.env` is gitignored.
 8. Open [@userinfobot](https://t.me/userinfobot) from the Telegram account that will own the copilot. Copy the numeric id into `TELEGRAM_OWNER_ID`.
 9. Choose a long random webhook secret, for example with `openssl rand -hex 32`, and put it in `TELEGRAM_WEBHOOK_SECRET`. Use only letters, numbers, `_`, and `-`.
 
-You don't need `/setcommands`, `/setdescription`, or `/setabouttext`. The bot sets its command menu, description, and short description itself every time it starts (see `src/bot/profile.ts`). It only changes them when the text in code differs from what Telegram has.
+You don't need `/setcommands`, `/setdescription`, or `/setabouttext`. The bot sets its command menu, description, and short description itself every time it starts (see `src/bot/profile.ts`). It only changes them when the text in code differs from what Telegram has. That menu is the BotFather command list, including:
+
+```text
+start - Start the copilot
+help - Show examples
+menu - Open the menu
+status - Show system status
+tasks - List pending tasks
+reminders - List reminders
+notes - List saved notes
+documents - List saved documents
+remember - Remember a preference or fact
+memories - List what I remember about you
+forget - Forget a memory by number
+add - Add equipment, a contact, or a link
+admin - Get a sign-in link for the admin web app
+```
 
 Until `TELEGRAM_OWNER_ID` is set, the bot tells every sender that it is not configured. It does not show tasks, notes, or files.
 
@@ -93,6 +109,7 @@ The app calls the xAI Responses API with the official OpenAI JavaScript SDK poin
 4. Copy the anon key to `SUPABASE_ANON_KEY` for your records. This backend does not use the anon key to read data. The migration revokes anon and authenticated access.
 5. Open the SQL editor and run the files in `supabase/migrations` in filename order.
    If you install the Supabase CLI later, `supabase db push` applies them. Trigram search answers identifier lookups from saved records. The equipment file adds equipment cards. The knowledge-chunks file adds pgvector embeddings for question answering. The chunk-type file marks narrative passages and short identifier passages. The chunk-search file returns the source id and chunk type with each match. The hybrid-search file publishes `hybrid_search_chunks` with a 1024-dimension vector. Leave `XAI_EMBEDDING_DIMENSIONS` at 1024. A 1536-dimension embedding will not fit that column.
+   If application logs show `PGRST202` for `hybrid_search_chunks`, apply `20261107230000_indexed_hybrid_search.sql` in the Supabase SQL editor. It creates the RPC required by the bot and asks PostgREST to reload its schema cache. If later migrations have not been applied, run all migrations in filename order instead.
 6. After you deploy (section 8), store the reminder cron's two secrets in Supabase Vault. Run this once in the SQL editor with your real values, and never commit it:
 
    ```sql
@@ -199,7 +216,7 @@ In the Render service's environment settings, enter the required values directly
 
 `XAI_API_KEY` is optional; without it, Grok features are unavailable. `SUPABASE_ANON_KEY` is not required. The app starts without `CRON_SECRET`, but then the reminder endpoint answers every call with 401, so set it.
 
-**Reminders on the free plan.** Render spins a free web service down after 15 minutes without inbound traffic, and the in-process reminder timer stops with it. The Supabase cron job in section 9 calls the app every minute, which delivers reminders on time and keeps the service awake. Keeping it awake uses about 720–744 of the 750 free instance hours Render gives each workspace per month, so don't run a second free service in the same workspace, or Render suspends all of them when the hours run out. On a paid always-on plan the cron is optional.
+**Keep the bot online while your PC is off.** Telegram must use the Render webhook; local Docker's default polling mode only works while your PC is on. Verify with Telegram `getWebhookInfo` that the webhook URL is your Render `/telegram/webhook` endpoint. Render's Free service sleeps after 15 minutes without inbound traffic, so it may take a cold-start delay to respond. Apply `20261115010000_reminder_cron.sql` and set both Supabase Vault secrets as described in section 5, step 6; the cron then calls Render every minute and keeps it awake. Confirm recent `cron.job_run_details` rows and HTTP 200 responses in `net._http_response` as described in section 9. This uses about 720–744 of the 750 free instance hours per month, so don't run a second free service in the same Render workspace.
 
 After Render assigns the service an HTTPS URL, set `PUBLIC_BASE_URL` to that URL and redeploy. If using a custom domain, add it in Render, configure the DNS records Render provides, wait for TLS/HTTPS to become active, then set `PUBLIC_BASE_URL` to the custom HTTPS origin (without a trailing path). Do not use the example domain below.
 
@@ -310,7 +327,24 @@ The Mac must be logged in, awake, and running Docker Desktop for scheduled jobs.
 
 `/status` in Telegram shows the time zone, database reachability, and whether Grok is configured, without displaying keys. The `ai_usage` table stores token counts and the cost estimate from `XAI_INPUT_USD_PER_MILLION` and `XAI_OUTPUT_USD_PER_MILLION`.
 
-## 12. Admin web app (optional)
+## 12. Forms
+
+Equipment, contacts, and website links use one form. You can fill it in the admin site or in a Telegram Mini App. The bot does not ask for these fields one by one in chat.
+
+Send `/add` in a private chat, or tap **Add** in the menu. The bot replies with three buttons: Equipment, Contact, and Website link. Each opens `/miniapp/<form>`. After a successful save the Mini App closes and the bot confirms in chat, for example `Saved equipment #12: Dell Latitude 5440, Floor 2.`
+
+Telegram only opens a Mini App from an `https://` address. Set `PUBLIC_BASE_URL` to that origin with no path on the end. `/add` tells you to set it when the value is missing or still `http://`.
+
+**Local tunnel**
+
+1. Run `npm run dev` so the app is on port 3000.
+2. Start a tunnel to that port, for example `cloudflared tunnel --url http://localhost:3000` or `ngrok http 3000`.
+3. Put the `https://` URL in `PUBLIC_BASE_URL` and restart `npm run dev`.
+4. Send `/add` to the bot.
+
+The same forms are at `/admin/equipment`, `/admin/contacts`, and `/admin/links` after you sign in. Bad input is shown under the field. Apply `supabase/migrations/20261117120000_forms.sql` before saving, or the insert fails.
+
+## 13. Admin web app (optional)
 
 A private web page at `/admin` for managing what the copilot stores. It is off by default. While `ADMIN_ENABLED` is not `true`, `/admin` returns 404 and the bot behaves exactly as before.
 
@@ -331,7 +365,7 @@ ADMIN_SESSION_SECRET=   # openssl rand -hex 32
 3. Run `npm run build` once to build the page into `dist/admin`, then `npm run dev`.
 4. Send `/admin` to the bot. Without `PUBLIC_BASE_URL`, the link points to `http://localhost:3000`.
 
-To work on the page with hot reload, keep `npm run dev` running and also start `npm run dev:admin`. Open `http://localhost:5173/admin/`. API calls are forwarded to port 3000. The sign-in link from the bot still points to port 3000, so change the port in the link to 5173 before you open it.
+To work on the page with hot reload, keep `npm run dev` running and also start `npm run dev:admin`. Open `http://localhost:5173/admin/`. API calls are forwarded to port 3000. The sign-in link from the bot still points to port 3000, so change the port in the link to 5173 before you open it. Equipment, Contacts, and Links are full pages on the API server. The dev server proxies those paths and `/forms` to port 3000.
 
 **On Render**
 

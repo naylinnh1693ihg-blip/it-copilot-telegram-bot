@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Deps } from "../../app/deps.js";
 import type { User, Equipment, EquipmentKind } from "../../types/models.js";
+import { IPV4 } from "../../utils/net.js";
 import { wrapUntrusted } from "../../utils/security.js";
 import { secretRisk } from "../../utils/text.js";
 import { toIso } from "../../utils/time.js";
@@ -12,6 +13,9 @@ const TYPE_LABEL: Record<EquipmentKind, string> = {
   printer: "Printer",
   switch: "Switch",
   access_point: "Access point",
+  laptop: "Laptop",
+  monitor: "Monitor",
+  server: "Server",
   other: "Other",
 };
 
@@ -19,6 +23,9 @@ const PLURAL: Record<EquipmentKind, string> = {
   printer: "Printers",
   switch: "Switches",
   access_point: "Access points",
+  laptop: "Laptops",
+  monitor: "Monitors",
+  server: "Servers",
   other: "Other equipment",
 };
 
@@ -28,7 +35,6 @@ const LIST = /^(?:please\s+)?(?:list|show)(?:\s+all)?(?:\s+my)?\s+(equipment|pri
 const SHOW_IP = /^(?:please\s+)?what(?:'s|s| is) the ip(?: address)? of\s+(.+?)\??$/i;
 const SHOW = /^(?:please\s+)?show equipment\s+(.+)$/i;
 const EXTRACT = /^(?:please\s+)?extract equipment from (note|document)\s+#?(\d+)$/i;
-const IPV4 = /^(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
 const CREATE_EXAMPLE = "Add equipment: HP LaserJet, Floor 2, 192.168.1.10";
 
 const ExtractedEquipmentSchema = z.object({

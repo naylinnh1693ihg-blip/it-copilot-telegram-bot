@@ -2,9 +2,11 @@ import type { Intent } from "../types/intent.js";
 import type {
   AdminSession,
   AuditEntry,
+  Contact,
   ConversationTurn,
   DocumentRecord,
   Equipment,
+  SavedLink,
   Memory,
   MemorySourceType,
   MemoryType,
@@ -112,8 +114,35 @@ export interface NewEquipment {
   location: string;
   ipAddress: string;
   notes: string;
+  serialNumber?: string;
+  status?: Equipment["status"];
+  purchaseDate?: string | null;
+  warrantyEnd?: string | null;
   sourceNoteId: string | null;
   sourceDocumentId: string | null;
+  createdAt: string;
+}
+
+export interface NewContact {
+  userId: string;
+  fullName: string;
+  email: string;
+  phone: string;
+  department: string;
+  jobTitle: string;
+  location: string;
+  telegramUsername: string;
+  notes: string;
+  createdAt: string;
+}
+
+export interface NewSavedLink {
+  userId: string;
+  url: string;
+  title: string;
+  category: SavedLink["category"];
+  tags: string[];
+  description: string;
   createdAt: string;
 }
 
@@ -206,6 +235,7 @@ export interface Database {
     at: string;
   }): Promise<User>;
   findUserById(id: string): Promise<User | null>;
+  findUserByTelegram(telegramUserId: number): Promise<User | null>;
   setUserRole(userId: string, role: UserRole): Promise<void>;
   setLastNotifiedReminder(userId: string, reminderId: string | null, at: string): Promise<void>;
   setDailySummaryTime(userId: string, time: string | null, at: string): Promise<void>;
@@ -270,6 +300,10 @@ export interface Database {
   insertEquipment(input: NewEquipment): Promise<Equipment>;
   updateEquipment(item: Equipment): Promise<Equipment>;
   listEquipment(userId: string): Promise<Equipment[]>;
+  insertContact(input: NewContact): Promise<Contact>;
+  listContacts(userId: string): Promise<Contact[]>;
+  insertSavedLink(input: NewSavedLink): Promise<SavedLink>;
+  listSavedLinks(userId: string): Promise<SavedLink[]>;
   saveExtraction(extraction: Extraction): Promise<void>;
   getExtraction(documentId: string): Promise<Extraction | null>;
   claimUpdate(updateId: number, telegramUserId: number | null, at: string): Promise<boolean>;

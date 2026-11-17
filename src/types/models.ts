@@ -125,7 +125,14 @@ export interface DocumentRecord {
   deletedAt: string | null;
 }
 
-export type EquipmentKind = "printer" | "switch" | "access_point" | "other";
+export const EQUIPMENT_KINDS = ["printer", "switch", "access_point", "laptop", "monitor", "server", "other"] as const;
+export type EquipmentKind = (typeof EQUIPMENT_KINDS)[number];
+
+export const EQUIPMENT_STATUSES = ["in_use", "in_stock", "in_repair", "retired"] as const;
+export type EquipmentStatus = (typeof EQUIPMENT_STATUSES)[number];
+
+export const LINK_CATEGORIES = ["documentation", "vendor_portal", "tool", "troubleshooting", "other"] as const;
+export type LinkCategory = (typeof LINK_CATEGORIES)[number];
 
 export interface Equipment {
   id: string;
@@ -135,9 +142,44 @@ export interface Equipment {
   kind: EquipmentKind;
   location: string;
   ipAddress: string;
+  serialNumber: string;
+  status: EquipmentStatus;
+  purchaseDate: string | null;
+  warrantyEnd: string | null;
   notes: string;
   sourceNoteId: string | null;
   sourceDocumentId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+export interface Contact {
+  id: string;
+  userId: string;
+  contactNumber: number;
+  fullName: string;
+  email: string;
+  phone: string;
+  department: string;
+  jobTitle: string;
+  location: string;
+  telegramUsername: string;
+  notes: string;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt: string | null;
+}
+
+export interface SavedLink {
+  id: string;
+  userId: string;
+  linkNumber: number;
+  url: string;
+  title: string;
+  category: LinkCategory;
+  tags: string[];
+  description: string;
   createdAt: string;
   updatedAt: string;
   deletedAt: string | null;

@@ -6,9 +6,20 @@ export class AppError extends Error {
 }
 
 export class DatabaseError extends Error {
-  constructor(message: string) {
+  constructor(message: string, public readonly code?: string) {
     super(message);
     this.name = "DatabaseError";
+  }
+}
+
+/** A unique index rejected the row. `field` is the form field that should show `message`. */
+export class DuplicateFieldError extends Error {
+  constructor(
+    public readonly field: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "DuplicateFieldError";
   }
 }
 
