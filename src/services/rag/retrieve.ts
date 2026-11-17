@@ -12,6 +12,7 @@ import { redactString } from "../../utils/text.js";
 import { isGenerationStopped } from "../../utils/errors.js";
 import { currentAbortSignal } from "../grok/abort.js";
 import { copyButtonsFor, groundedCopyButtons } from "../assistant/copyButtons.js";
+import { usageFields } from "../llm/usage.js";
 
 const QUESTION = /^(?:what|where|who|when|why|how|which|whose|is|are|do|does|did|can|could|should|tell me|explain)\b/i;
 
@@ -61,17 +62,15 @@ export async function answerWithRag(
           user: userText,
           minIntervalMs: deps.env.TELEGRAM_EDIT_INTERVAL_MS,
           signal: currentAbortSignal(),
+          effort: "medium",
         })
-      : await deps.llm.completeText({ system, user: userText, signal: currentAbortSignal() });
+      : await deps.llm.completeText({ system, user: userText, signal: currentAbortSignal(), effort: "medium" });
     await deps.db.recordUsage({
       userId: user.id,
-      model: deps.env.XAI_MODEL,
       purpose: "rag",
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
-      estimatedUsd:
-        (result.inputTokens / 1_000_000) * deps.env.XAI_INPUT_USD_PER_MILLION +
-        (result.outputTokens / 1_000_000) * deps.env.XAI_OUTPUT_USD_PER_MILLION,
+      ...usageFields(deps.env, result, deps.env.XAI_MODEL),
       createdAt: toIso(deps.clock.now()),
     }).catch(() => undefined);
 

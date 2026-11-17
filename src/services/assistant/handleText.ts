@@ -15,6 +15,7 @@ import { createManyTasks, extractLocalTasks, extractTasksWithGrok } from "./mult
 import { createManyReminders, extractLocalReminders, extractRemindersWithGrok } from "./multiReminder.js";
 import { answerWithRag, looksLikeQuestion } from "../rag/retrieve.js";
 import { currentAbortSignal } from "../grok/abort.js";
+import { usageFields } from "../llm/usage.js";
 
 async function interpret(
   deps: Deps,
@@ -55,17 +56,15 @@ async function interpret(
       user: prompt.user,
       schemaName: "copilot_intent",
       schema: INTENT_JSON_SCHEMA,
+      effort: "low",
       signal: currentAbortSignal(),
     });
     await deps.db.recordUsage({
       userId: user.id,
-      model: deps.env.XAI_MODEL,
       purpose: "intent",
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
-      estimatedUsd:
-        (result.inputTokens / 1_000_000) * deps.env.XAI_INPUT_USD_PER_MILLION +
-        (result.outputTokens / 1_000_000) * deps.env.XAI_OUTPUT_USD_PER_MILLION,
+      ...usageFields(deps.env, result, deps.env.XAI_MODEL),
       createdAt: toIso(deps.clock.now()),
     }).catch(() => undefined);
     const parsed = IntentSchema.safeParse(JSON.parse(result.text));

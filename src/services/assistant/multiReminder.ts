@@ -9,6 +9,7 @@ import { cleanText, redactString, secretRisk } from "../../utils/text.js";
 import { formatWhen, toIso } from "../../utils/time.js";
 import type { Reply } from "./execute.js";
 import { reminderDelivery } from "../reminders/delivery.js";
+import { usageFields } from "../llm/usage.js";
 
 export interface ReminderDraft {
   title: string;
@@ -171,13 +172,10 @@ export async function extractRemindersWithGrok(deps: Deps, user: User, text: str
   });
   await deps.db.recordUsage({
     userId: user.id,
-    model: deps.env.XAI_MODEL,
     purpose: "multi_reminder",
     inputTokens: result.inputTokens,
     outputTokens: result.outputTokens,
-    estimatedUsd:
-      (result.inputTokens / 1_000_000) * deps.env.XAI_INPUT_USD_PER_MILLION +
-      (result.outputTokens / 1_000_000) * deps.env.XAI_OUTPUT_USD_PER_MILLION,
+    ...usageFields(deps.env, result, deps.env.XAI_MODEL),
     createdAt: toIso(deps.clock.now()),
   }).catch(() => undefined);
   let raw: unknown;

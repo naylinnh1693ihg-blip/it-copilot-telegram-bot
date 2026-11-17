@@ -8,6 +8,7 @@ import type { VisionImage } from "./vision.js";
 import { toIso } from "../../utils/time.js";
 import { currentAbortSignal } from "../grok/abort.js";
 import { escapeRichBlock, escapeRichInline, RICH_MAX_CHARS } from "../../utils/richMarkdown.js";
+import { usageFields } from "../llm/usage.js";
 
 const MAX_GROK_INPUT = 12_000;
 const MAX_TELEGRAM_REPLY = 3_500;
@@ -242,6 +243,7 @@ export async function summarizeDocument(
     user: userText,
     schemaName: "document_analysis",
     schema: DOCUMENT_ANALYSIS_JSON_SCHEMA,
+    effort: "high" as const,
     images: images.map((image) => ({ mime: image.mime, base64: image.data.toString("base64") })),
     model: images.length ? visionModel : choice.model,
     ...(longContext
@@ -262,13 +264,10 @@ export async function summarizeDocument(
 
   await deps.db.recordUsage({
     userId: user.id,
-    model: images.length ? visionModel : choice.model,
     purpose: images.length ? "document_vision" : "document_analysis",
     inputTokens: result.inputTokens,
     outputTokens: result.outputTokens,
-    estimatedUsd:
-      (result.inputTokens / 1_000_000) * deps.env.XAI_INPUT_USD_PER_MILLION +
-      (result.outputTokens / 1_000_000) * deps.env.XAI_OUTPUT_USD_PER_MILLION,
+    ...usageFields(deps.env, result, images.length ? visionModel : choice.model),
     createdAt: toIso(deps.clock.now()),
   }).catch(() => undefined);
 

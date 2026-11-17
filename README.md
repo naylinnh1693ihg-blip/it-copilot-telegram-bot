@@ -101,6 +101,24 @@ How the group works:
 
 The app calls the xAI Responses API with the official OpenAI JavaScript SDK pointed at that base URL. Requests set `store: false`, so xAI is not asked to keep the conversation on its servers. Internet search uses xAI's built-in `web_search` tool and replies include source links. Add credit in the xAI console or requests will fail. The built-in phrases in `/help` still work when the key is missing. Free-form wording, web search, English rewriting, and document summaries need the key.
 
+### Optional: Claude backup (Anthropic)
+
+Grok stays the primary model. If you also set `ANTHROPIC_API_KEY`, the bot switches to Claude when Grok is rate-limited (429), out of credit (402, or a 403 about credits), returning server errors, timing out, or unreachable. A rejected request (400), a refusal, or pressing Stop never switches. After a switch, every call goes to Claude for `LLM_FALLBACK_COOLDOWN_MS` (default 300000, five minutes), or longer if Grok's `retry-after` asks for it, and then Grok is tried again. A streamed reply switches only if Grok failed before any text reached Telegram, so one reply never mixes two models.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ANTHROPIC_API_KEY` | empty | Empty means no backup; the bot behaves exactly as before. Create it at [platform.claude.com](https://platform.claude.com). |
+| `CLAUDE_MODEL` | `claude-opus-5-5` | Model used for the backup. |
+| `CLAUDE_TIMEOUT_MS` | `120000` | Limit for one non-streamed Claude request. |
+| `LLM_FALLBACK_COOLDOWN_MS` | `300000` | How long calls stay on Claude after a Grok limit or outage. |
+
+Things to know:
+
+- **Claude has no embeddings.** Embeddings stay on xAI. If xAI embedding fails, question answering uses keyword (trigram) search, and Claude can still write the answer. With only `ANTHROPIC_API_KEY` set and no `XAI_API_KEY`, Claude answers alone and search uses keywords only.
+- **Claude replies cost more than Grok.** At the default model, `claude-opus-5-5` lists at $4 per million input tokens and $20 per million output tokens, against $2 / $6 for `grok-4.7`. `ai_usage` records the model that actually answered, and `Week cost` shows Grok and Claude subtotals separately.
+- Claude requests opt in to Anthropic's server-side refusal fallback. If Claude declines a request, Anthropic re-runs it on its recommended fallback model in the same call. If that model also declines, the bot says so plainly.
+- `/status` shows which provider is answering, for example `Claude backup (claude-opus-5-5) active until 14:05 (Grok rate-limited)`. It never shows keys.
+
 ## 5. Create Supabase
 
 1. Create a project at [supabase.com](https://supabase.com).
@@ -214,7 +232,7 @@ In the Render service's environment settings, enter the required values directly
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `PUBLIC_BASE_URL`
 
-`XAI_API_KEY` is optional; without it, Grok features are unavailable. `SUPABASE_ANON_KEY` is not required. The app starts without `CRON_SECRET`, but then the reminder endpoint answers every call with 401, so set it.
+`XAI_API_KEY` is optional; without it, Grok features are unavailable unless `ANTHROPIC_API_KEY` is set, in which case Claude answers alone. `ANTHROPIC_API_KEY` is optional and only adds the Claude backup. `SUPABASE_ANON_KEY` is not required. The app starts without `CRON_SECRET`, but then the reminder endpoint answers every call with 401, so set it.
 
 **Keep the bot online while your PC is off.** Telegram must use the Render webhook; local Docker's default polling mode only works while your PC is on. Verify with Telegram `getWebhookInfo` that the webhook URL is your Render `/telegram/webhook` endpoint. Render's Free service sleeps after 15 minutes without inbound traffic, so it may take a cold-start delay to respond. Apply `20261115010000_reminder_cron.sql` and set both Supabase Vault secrets as described in section 5, step 6; the cron then calls Render every minute and keeps it awake. Confirm recent `cron.job_run_details` rows and HTTP 200 responses in `net._http_response` as described in section 9. This uses about 720–744 of the 750 free instance hours per month, so don't run a second free service in the same Render workspace.
 
@@ -325,7 +343,7 @@ chmod +x scripts/*.sh
 
 The Mac must be logged in, awake, and running Docker Desktop for scheduled jobs. Review `~/Library/Logs/com.itworkcopilot.weekly-backup.log`. To remove the schedule, run `launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.itworkcopilot.weekly-backup.plist"` and remove that named plist. Backups are sensitive; do not share the archive, rclone config, or `.env`.
 
-`/status` in Telegram shows the time zone, database reachability, and whether Grok is configured, without displaying keys. The `ai_usage` table stores token counts and the cost estimate from `XAI_INPUT_USD_PER_MILLION` and `XAI_OUTPUT_USD_PER_MILLION`.
+`/status` in Telegram shows the time zone, database reachability, and which AI provider is answering (Grok, or the Claude backup and until when), without displaying keys. The `ai_usage` table stores token counts and the cost estimate from `XAI_INPUT_USD_PER_MILLION` and `XAI_OUTPUT_USD_PER_MILLION`.
 
 ## 12. Forms
 

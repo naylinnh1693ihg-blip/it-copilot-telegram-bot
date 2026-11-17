@@ -59,6 +59,13 @@ const schema = z.object({
   XAI_LONG_CONTEXT_TIMEOUT_MS: z.coerce.number().int().min(45_000).max(120_000).default(90_000),
   XAI_INPUT_USD_PER_MILLION: z.coerce.number().nonnegative().default(2),
   XAI_OUTPUT_USD_PER_MILLION: z.coerce.number().nonnegative().default(6),
+  /** Claude backup for when Grok is rate-limited, out of credit, or down. Empty means no fallback. */
+  ANTHROPIC_API_KEY: z.string().default(""),
+  CLAUDE_MODEL: z.string().min(1).default("claude-opus-5-5"),
+  /** Claude streams long answers; this bounds one non-streamed request. */
+  CLAUDE_TIMEOUT_MS: z.coerce.number().int().min(10_000).max(600_000).default(120_000),
+  /** After a Grok limit or outage, send calls straight to Claude for this long (or Grok's longer retry-after). */
+  LLM_FALLBACK_COOLDOWN_MS: z.coerce.number().int().min(0).default(300_000),
   SUPABASE_URL: z.string().default(""),
   SUPABASE_ANON_KEY: z.string().default(""),
   SUPABASE_SERVICE_ROLE_KEY: z.string().default(""),

@@ -6,6 +6,7 @@ import { wrapUntrusted } from "../../utils/security.js";
 import { cleanText, secretRisk } from "../../utils/text.js";
 import { toIso } from "../../utils/time.js";
 import type { Reply } from "./execute.js";
+import { usageFields } from "../llm/usage.js";
 
 export interface TaskDraft {
   title: string;
@@ -139,13 +140,10 @@ export async function extractTasksWithGrok(deps: Deps, user: User, text: string)
   });
   await deps.db.recordUsage({
     userId: user.id,
-    model: deps.env.XAI_MODEL,
     purpose: "multi_task",
     inputTokens: result.inputTokens,
     outputTokens: result.outputTokens,
-    estimatedUsd:
-      (result.inputTokens / 1_000_000) * deps.env.XAI_INPUT_USD_PER_MILLION +
-      (result.outputTokens / 1_000_000) * deps.env.XAI_OUTPUT_USD_PER_MILLION,
+    ...usageFields(deps.env, result, deps.env.XAI_MODEL),
     createdAt: toIso(deps.clock.now()),
   }).catch(() => undefined);
   const parsed = MultiTaskRequestSchema.safeParse(JSON.parse(result.text));
