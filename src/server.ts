@@ -2,7 +2,8 @@ import "dotenv/config";
 import { missingRuntimeSettings, parseEnv } from "./config/env.js";
 import { createSupabaseClient, SupabaseDatabase } from "./database/supabase.js";
 import { createSupabaseStorage } from "./services/documents/storage.js";
-import { createLlmClient } from "./services/llm/factory.js";
+import { createLlmRuntime } from "./services/llm/factory.js";
+import { budgetWeekStart } from "./services/llm/week.js";
 import { createBot, telegramWebhook } from "./bot/index.js";
 import { inlineButtons } from "./bot/keyboards/menus.js";
 import { createHttpApp } from "./routes/http.js";
@@ -30,12 +31,20 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  const clock = zoneClock(env.APP_TIMEZONE);
+  // The bot is created after the model client, so the owner notice sender is filled in once it exists.
+  let notifyOwner: (text: string) => Promise<void> = async () => undefined;
+  const runtime = createLlmRuntime(env, logger, {
+    loadUsage: () => db.usageTotalsSince(budgetWeekStart(clock.now(), env.LLM_BUDGET_WEEK_START)),
+    notify: (text) => notifyOwner(text),
+  });
   const deps: Deps = {
     env,
     db,
-    clock: zoneClock(env.APP_TIMEZONE),
+    clock,
     logger,
-    llm: createLlmClient(env, logger),
+    llm: runtime.llm,
+    llmBudgetReport: runtime.budgetReport ?? undefined,
     storage: createSupabaseStorage(client),
   };
 
@@ -44,6 +53,10 @@ async function main(): Promise<void> {
   }
 
   const bot = createBot(env.TELEGRAM_BOT_TOKEN, deps);
+  notifyOwner = async (text) => {
+    if (!env.TELEGRAM_OWNER_ID) return;
+    await bot.api.sendMessage(Number(env.TELEGRAM_OWNER_ID), text);
+  };
   const sendReminder = async (telegramUserId: number, text: string, buttons?: Array<{ label: string; data: string }>) => {
     const sent = await bot.api.sendMessage(
       telegramUserId,

@@ -19,7 +19,7 @@ import type {
   UserRole,
 } from "../types/models.js";
 import { SAVED_TEXT_MIN_SIMILARITY, cosineSimilarity, hybridScore, lexicalSimilarity, trigramWordSimilarity } from "./similarity.js";
-import type { ChunkHit, ChunkSource, CompletedTask, Database, MemoryQuery, NewAdminLoginToken, NewAdminSession, NewDocument, NewEquipment, NewKnowledge, NewMemory, NewNote, NewReminder, NewTask, SavedTextHit, StoredChunk, UsageSlice } from "./types.js";
+import type { ChunkHit, ChunkSource, CompletedTask, Database, MemoryQuery, NewAdminLoginToken, NewAdminSession, NewDocument, NewEquipment, NewKnowledge, NewMemory, NewNote, NewReminder, NewTask, SavedTextHit, StoredChunk, UsageSlice, UsageTotal } from "./types.js";
 
 interface Counters {
   task: number;
@@ -729,6 +729,18 @@ export class MemoryDatabase implements Database {
     return this.usage
       .filter((entry) => entry.userId === userId && Date.parse(entry.createdAt) >= from && Date.parse(entry.createdAt) < until)
       .map((entry) => ({ model: entry.model, inputTokens: entry.inputTokens, outputTokens: entry.outputTokens }));
+  }
+
+  async usageTotalsSince(fromInclusive: string): Promise<UsageTotal[]> {
+    const from = Date.parse(fromInclusive);
+    return this.usage
+      .filter((entry) => Date.parse(entry.createdAt) >= from)
+      .map((entry) => ({
+        model: entry.model,
+        inputTokens: entry.inputTokens,
+        outputTokens: entry.outputTokens,
+        estimatedUsd: entry.estimatedUsd,
+      }));
   }
 
   async listUsageEvents(userId: string, fromInclusive: string, untilExclusive: string): Promise<import("./types.js").UsageEventRow[]> {

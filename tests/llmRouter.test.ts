@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LlmClient, LlmResult } from "../src/services/grok/client.js";
-import { createRoutedClient, type FallbackInfo } from "../src/services/llm/router.js";
+import { createRoutedClient, type DivertInfo, type FallbackInfo, type Provider } from "../src/services/llm/router.js";
 import type { ClaudeTask } from "../src/services/llm/tasks.js";
 import { GrokError } from "../src/utils/errors.js";
 
@@ -36,9 +36,13 @@ function build(options: {
   claudeFails?: GrokError;
   xaiFails?: GrokError;
   max?: number;
+  avoid?: Partial<Record<Provider, "quota" | "budget">>;
 }) {
   const log: Log = [];
   const fallbacks: FallbackInfo[] = [];
+  const diverts: DivertInfo[] = [];
+  const used: string[] = [];
+  const errors: string[] = [];
   const client = createRoutedClient({
     xai: fake("xai", log, options.xaiFails),
     claude: { fast: fake("fast", log, options.claudeFails), standard: fake("std", log, options.claudeFails) },
@@ -46,8 +50,12 @@ function build(options: {
     fallback: options.fallback ?? false,
     maxClaudeInputTokens: options.max ?? 500_000,
     onFallback: (info) => fallbacks.push(info),
+    avoid: async (provider) => options.avoid?.[provider] ?? null,
+    onUsage: (provider) => used.push(provider),
+    onProviderError: (provider, error) => errors.push(`${provider}:${error.status}`),
+    onDivert: (info) => diverts.push(info),
   });
-  return { client, log, fallbacks };
+  return { client, log, fallbacks, diverts, used, errors };
 }
 
 const ask = { system: "S", user: "U" };
@@ -165,5 +173,50 @@ describe("llm router", () => {
     const result = await client.completeText({ ...ask, webSearch: true });
     expect(result.text).toBe("std");
     expect(log).toEqual(["xai.completeText", "std.completeText"]);
+  });
+
+  it("moves work off a Claude task that is over budget, without needing fallback", async () => {
+    const { client, log, diverts } = build({ tasks: ["answer"], avoid: { claude: "budget" } });
+    await client.streamText!(ask);
+    expect(log).toEqual(["xai.streamText"]);
+    expect(diverts).toEqual([{ task: "answer", from: "claude", to: "xai", reason: "budget" }]);
+  });
+
+  it("moves xAI work to Claude only when fallback is on", async () => {
+    const off = build({ tasks: [], avoid: { xai: "budget" } });
+    await off.client.completeStructured(structured);
+    expect(off.log).toEqual(["xai.completeStructured"]);
+
+    const on = build({ tasks: [], fallback: true, avoid: { xai: "quota" } });
+    await on.client.completeStructured(structured);
+    expect(on.log).toEqual(["fast.completeStructured"]);
+    expect(on.diverts).toEqual([{ task: "extract", from: "xai", to: "claude", reason: "quota" }]);
+  });
+
+  it("stays put when both providers are avoided, and for work only xAI can do", async () => {
+    const both = build({ tasks: ["answer"], fallback: true, avoid: { xai: "budget", claude: "budget" } });
+    await both.client.streamText!(ask);
+    expect(both.log).toEqual(["std.streamText"]);
+
+    const only = build({ tasks: ["tools"], fallback: true, avoid: { xai: "budget" } });
+    await only.client.completeWithTools!({ ...ask, tools: [{ type: "x_search" }] });
+    expect(only.log).toEqual(["xai.completeWithTools"]);
+  });
+
+  it("does not move a tool loop that is already under way", async () => {
+    const { client, log } = build({ tasks: ["tools"], avoid: { claude: "budget" } });
+    await client.completeWithTools!({ ...ask, tools: [{ type: "function", name: "x" }], input: [{ role: "user", content: "U" }] });
+    expect(log).toEqual(["std.completeWithTools"]);
+  });
+
+  it("reports usage and provider errors", async () => {
+    const ok = build({ tasks: ["answer"] });
+    await ok.client.streamText!(ask);
+    expect(ok.used).toEqual(["claude"]);
+
+    const bad = build({ tasks: ["answer"], fallback: true, claudeFails: new GrokError("limit", true, 429, "claude") });
+    await bad.client.streamText!(ask);
+    expect(bad.errors).toEqual(["claude:429"]);
+    expect(bad.used).toEqual(["xai"]);
   });
 });

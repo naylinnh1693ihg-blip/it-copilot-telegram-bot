@@ -9,3 +9,7 @@
  */
 export const CLAUDE_TASKS = ["extract", "answer", "document", "tools", "web"] as const;
 export type ClaudeTask = (typeof CLAUDE_TASKS)[number];
+
+/** First day of the budget week. The week starts at 00:00 in APP_TIMEZONE. */
+export const WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
+export type Weekday = (typeof WEEKDAYS)[number];

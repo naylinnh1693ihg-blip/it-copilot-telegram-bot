@@ -161,6 +161,11 @@ export interface UsageSlice {
   outputTokens: number;
 }
 
+/** One stored model request from any user, including requests with no user such as embeddings. */
+export interface UsageTotal extends UsageSlice {
+  estimatedUsd: number;
+}
+
 export interface UsageEventRow {
   model: string;
   purpose: string;
@@ -288,6 +293,8 @@ export interface Database {
   /** Usage in [fromInclusive, untilExclusive). One entry per stored request. */
   listUsage(userId: string, fromInclusive: string, untilExclusive: string): Promise<UsageSlice[]>;
   listUsageEvents(userId: string, fromInclusive: string, untilExclusive: string): Promise<UsageEventRow[]>;
+  /** Every usage row created at or after fromInclusive, for all users. Used for provider budgets. */
+  usageTotalsSince(fromInclusive: string): Promise<UsageTotal[]>;
   replaceChunks(userId: string, source: ChunkSource, sourceId: string, chunks: StoredChunk[]): Promise<void>;
   listChunks(userId: string, source: ChunkSource, sourceId: string): Promise<StoredChunk[]>;
   searchChunks(userId: string, query: string, embedding: number[] | null, embeddingModel: string | null, limit: number): Promise<ChunkHit[]>;

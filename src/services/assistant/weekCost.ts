@@ -19,7 +19,8 @@ export function localWeekBounds(now: DateTime): { from: string; until: string } 
 export async function weekCostReply(deps: Deps, user: User, now: DateTime): Promise<string> {
   const bounds = localWeekBounds(now);
   const rows = await deps.db.listUsage(user.id, bounds.from, bounds.until);
-  return formatWeekCost(rows);
+  const budget = await deps.llmBudgetReport?.().catch(() => null);
+  return budget ? `${formatWeekCost(rows)}\n\n${budget}` : formatWeekCost(rows);
 }
 
 export function formatWeekCost(rows: UsageSlice[]): string {

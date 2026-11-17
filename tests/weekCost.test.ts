@@ -117,6 +117,28 @@ describe("week cost", () => {
     expect(text.includes("price unknown")).toBe(false);
   });
 
+  it("adds the provider budget report to the weekly reply when one is set", async () => {
+    const { deps, db } = testDeps();
+    deps.llm = throwingLlm();
+    deps.llmBudgetReport = async () => "Provider budgets this week:\nGrok: 1M of 5M tokens (20%)";
+    const user = await owner(db);
+    const reply = await handleText(deps, user, "How much did I spend this week?");
+    expect(reply.text).toContain("No AI usage recorded this week.");
+    expect(reply.text).toContain("Grok: 1M of 5M tokens (20%)");
+  });
+
+  it("totals usage for every user, including rows with no user", async () => {
+    const { db } = testDeps();
+    const user = await owner(db);
+    const at = (iso: string) => iso;
+    await db.recordUsage({ userId: user.id, model: "grok-4.7", purpose: "intent", inputTokens: 10, outputTokens: 5, estimatedUsd: 0.1, createdAt: at("2026-11-17T10:00:00.000Z") });
+    await db.recordUsage({ userId: null, model: "v1", purpose: "embedding", inputTokens: 7, outputTokens: 0, estimatedUsd: 0, createdAt: at("2026-11-17T11:00:00.000Z") });
+    await db.recordUsage({ userId: user.id, model: "grok-4.7", purpose: "intent", inputTokens: 99, outputTokens: 99, estimatedUsd: 9, createdAt: at("2026-11-01T00:00:00.000Z") });
+    const totals = await db.usageTotalsSince("2026-11-15T00:00:00.000Z");
+    expect(totals).toHaveLength(2);
+    expect(totals.map((row) => row.model).sort()).toEqual(["grok-4.7", "v1"]);
+  });
+
   it("uses Monday-to-Monday in the user timezone", async () => {
     const { deps, db } = testDeps();
     deps.llm = throwingLlm();

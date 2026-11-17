@@ -266,6 +266,8 @@ The bot can use Claude next to Grok. It is off until you set `ANTHROPIC_API_KEY`
 
 Embeddings, X search and the code interpreter always stay on xAI, so `XAI_API_KEY` is still required. A question that needs X search runs entirely on Grok, even when `tools` or `web` is chosen. Usage rows record the model that answered, and the weekly cost reply lists Grok and Claude models separately.
 
+Optional weekly limits keep either provider from running dry. Set `XAI_WEEKLY_TOKEN_LIMIT` or `XAI_WEEKLY_USD_LIMIT` (and the `ANTHROPIC_` pair) to what you want to allow per week, and `LLM_BUDGET_WEEK_START` to the weekday your provider's limit resets (`mon` to `sun`, at midnight in `APP_TIMEZONE`). Once a provider reaches `LLM_BUDGET_DIVERT_PERCENT` (default 90) of a limit, or answers with a 402 or 429 error, new work that the other provider can do goes there for the rest of the week or a few minutes, and the bot sends you one short notice. Work moves to Grok freely. It moves to Claude only when `LLM_FALLBACK=true`. Totals come from the bot's own usage records, so they can run lower than your provider's count (hidden reasoning tokens, search fees, other apps on the same key). The weekly cost reply shows each limit. With only `XAI_API_KEY` set there is nothing to move work to, so a limit just appears in that reply.
+
 ## Commands you will use
 
 ```bash

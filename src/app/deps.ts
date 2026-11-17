@@ -11,5 +11,7 @@ export interface Deps {
   clock: Clock;
   logger: AppLogger;
   llm: LlmClient | null;
+  /** Optional text about provider weekly budgets, added to the weekly cost reply. */
+  llmBudgetReport?: () => Promise<string | null>;
   storage: ObjectStorage;
 }

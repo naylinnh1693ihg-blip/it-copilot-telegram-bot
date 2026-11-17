@@ -1,8 +1,9 @@
 import { GrokError } from "../../utils/errors.js";
-import type { LlmClient } from "../grok/client.js";
+import type { LlmClient, LlmResult } from "../grok/client.js";
+import type { Provider } from "./budget.js";
 import type { ClaudeTask } from "./tasks.js";
 
-export type Provider = "xai" | "claude";
+export type { Provider } from "./budget.js";
 
 export interface FallbackInfo {
   task: ClaudeTask;
@@ -10,6 +11,14 @@ export interface FallbackInfo {
   to: Provider;
   status: number;
   message: string;
+}
+
+export interface DivertInfo {
+  task: ClaudeTask;
+  from: Provider;
+  to: Provider;
+  /** quota: the provider just returned a quota or rate-limit error. budget: it reached its weekly limit. */
+  reason: "quota" | "budget";
 }
 
 export interface RouterOptions {
@@ -26,6 +35,16 @@ export interface RouterOptions {
   /** Estimated input tokens (characters / 4) above which a request stays on xAI. */
   maxClaudeInputTokens: number;
   onFallback?: (info: FallbackInfo) => void;
+  /**
+   * Budget hooks. avoid(p) says a provider should not get work that can run elsewhere.
+   * Work moves to xAI freely. It moves to Claude only when fallback is true, because that sends the request to a second vendor.
+   */
+  avoid?: (provider: Provider) => Promise<"quota" | "budget" | null>;
+  /** Called after every successful call with the provider that answered. */
+  onUsage?: (provider: Provider, result: LlmResult) => void;
+  /** Called for every provider error, before any fallback. */
+  onProviderError?: (provider: Provider, error: GrokError) => void;
+  onDivert?: (info: DivertInfo) => void;
 }
 
 function estimateTokens(...parts: string[]): number {
@@ -40,21 +59,42 @@ function estimateTokens(...parts: string[]): number {
  * - a request that uses xAI's X search or code interpreter, and every embedding, always runs on xAI
  */
 export function createRoutedClient(options: RouterOptions): LlmClient {
-  async function route<T>(
+  async function route<T extends LlmResult>(
     task: ClaudeTask | null,
     size: number,
     call: (provider: Provider) => Promise<T>,
     canFallback = true,
   ): Promise<T> {
     const eligible = task !== null && size <= options.maxClaudeInputTokens;
-    const primary: Provider = eligible && options.tasks.has(task) ? "claude" : "xai";
+    let primary: Provider = eligible && options.tasks.has(task) ? "claude" : "xai";
+
+    // Move work off a provider that is out of budget or rate limited, when the other one can take it.
+    if (eligible && canFallback && options.avoid) {
+      const other: Provider = primary === "claude" ? "xai" : "claude";
+      const reason = await options.avoid(primary);
+      if (reason && (other === "xai" || options.fallback) && !(await options.avoid(other))) {
+        options.onDivert?.({ task, from: primary, to: other, reason });
+        primary = other;
+      }
+    }
+
+    const finish = (provider: Provider, result: T): T => {
+      options.onUsage?.(provider, result);
+      return result;
+    };
     try {
-      return await call(primary);
+      return finish(primary, await call(primary));
     } catch (error) {
+      if (error instanceof GrokError) options.onProviderError?.(primary, error);
       if (!options.fallback || !canFallback || !eligible || !(error instanceof GrokError)) throw error;
       const secondary: Provider = primary === "claude" ? "xai" : "claude";
       options.onFallback?.({ task, from: primary, to: secondary, status: error.status, message: error.message });
-      return call(secondary);
+      try {
+        return finish(secondary, await call(secondary));
+      } catch (secondError) {
+        if (secondError instanceof GrokError) options.onProviderError?.(secondary, secondError);
+        throw secondError;
+      }
     }
   }
 

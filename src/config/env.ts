@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CLAUDE_TASKS, type ClaudeTask } from "../services/llm/tasks.js";
+import { CLAUDE_TASKS, WEEKDAYS, type ClaudeTask } from "../services/llm/tasks.js";
 
 const schema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().default(""),
@@ -63,6 +63,15 @@ const schema = z.object({
       }
       return [...new Set(items)] as ClaudeTask[];
     }),
+  /** Optional weekly limits per provider. 0 means no limit. Used to move work to the other provider before a limit is hit. */
+  XAI_WEEKLY_TOKEN_LIMIT: z.coerce.number().int().nonnegative().default(0),
+  XAI_WEEKLY_USD_LIMIT: z.coerce.number().nonnegative().default(0),
+  ANTHROPIC_WEEKLY_TOKEN_LIMIT: z.coerce.number().int().nonnegative().default(0),
+  ANTHROPIC_WEEKLY_USD_LIMIT: z.coerce.number().nonnegative().default(0),
+  /** The budget week starts on this day at 00:00 in APP_TIMEZONE. Match the day your provider's limit resets. */
+  LLM_BUDGET_WEEK_START: z.enum(WEEKDAYS).default("mon"),
+  /** A provider at this percent of a weekly limit stops getting work that can run on the other provider. */
+  LLM_BUDGET_DIVERT_PERCENT: z.coerce.number().int().min(50).max(100).default(90),
   /** When "true", a failed call on a task Claude can handle is retried once on the other provider. */
   LLM_FALLBACK: z
     .string()

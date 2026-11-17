@@ -25,7 +25,7 @@ import type {
 } from "../types/models.js";
 import { DatabaseError } from "../utils/errors.js";
 import { redactString } from "../utils/text.js";
-import type { ChunkHit, ChunkSource, CompletedTask, Database, MemoryQuery, NewAdminLoginToken, NewAdminSession, NewDocument, NewEquipment, NewKnowledge, NewMemory, NewNote, NewReminder, NewTask, SavedTextHit, StoredChunk, UsageSlice } from "./types.js";
+import type { ChunkHit, ChunkSource, CompletedTask, Database, MemoryQuery, NewAdminLoginToken, NewAdminSession, NewDocument, NewEquipment, NewKnowledge, NewMemory, NewNote, NewReminder, NewTask, SavedTextHit, StoredChunk, UsageSlice, UsageTotal } from "./types.js";
 
 type Row = Record<string, unknown>;
 
@@ -1349,6 +1349,33 @@ export class SupabaseDatabase implements Database {
       inputTokens: integer(row, "input_tokens"),
       outputTokens: integer(row, "output_tokens"),
     }));
+  }
+
+  async usageTotalsSince(fromInclusive: string): Promise<UsageTotal[]> {
+    // PostgREST returns at most 1000 rows per request, so read the week in pages.
+    const pageSize = 1000;
+    const totals: UsageTotal[] = [];
+    for (let offset = 0; ; offset += pageSize) {
+      const { data, error } = await this.client
+        .from("ai_usage")
+        .select("model, input_tokens, output_tokens, estimated_usd")
+        .gte("created_at", fromInclusive)
+        .order("created_at", { ascending: true })
+        .order("id", { ascending: true })
+        .range(offset, offset + pageSize - 1);
+      this.raise(error);
+      const batch = rows(data);
+      for (const row of batch) {
+        totals.push({
+          model: text(row, "model"),
+          inputTokens: integer(row, "input_tokens"),
+          outputTokens: integer(row, "output_tokens"),
+          estimatedUsd: real(row, "estimated_usd"),
+        });
+      }
+      if (batch.length < pageSize) break;
+    }
+    return totals;
   }
 
   async listUsageEvents(userId: string, fromInclusive: string, untilExclusive: string): Promise<import("./types.js").UsageEventRow[]> {
