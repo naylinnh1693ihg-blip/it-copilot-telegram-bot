@@ -82,11 +82,17 @@ export class ClaudeError extends LlmError {
   }
 }
 
-/** 402, or a 403 whose message is about credits or billing. A plain 403 (bad key, no model access) is not billing. */
+const BILLING_WORDS = /\b(credit|credits|billing|spending|spend limit|quota|subscription|balance|payment)\b/i;
+
+/**
+ * 402, or a 403 whose message is about credits or billing. A plain 403 (bad key, no model access) is not billing.
+ * Anthropic reports an empty credit balance as a 400 whose message says so, so that counts for Claude too.
+ */
 export function isBillingError(error: unknown): boolean {
   if (!(error instanceof LlmError)) return false;
   if (error.status === 402) return true;
-  return error.status === 403 && /\b(credit|credits|billing|spending|spend limit|quota|subscription|balance|payment)\b/i.test(error.message);
+  if (error.status === 403) return BILLING_WORDS.test(error.message);
+  return error.status === 400 && error.provider === "claude" && BILLING_WORDS.test(error.message);
 }
 
 /** Reads retry-after-ms or retry-after (seconds or an HTTP date) from SDK error headers. */
@@ -125,6 +131,13 @@ export function toUserMessage(error: unknown): string {
   if (error instanceof ClaudeError) {
     if (error.kind === "refusal") {
       return "Claude declined this request, so I have no answer for it. Try rewording the question.";
+    }
+    const lead = error.afterFallback ? "Grok was unavailable, and the Claude backup" : "Claude";
+    if (isBillingError(error)) {
+      return `${lead} has no Anthropic credit left, so I did not get an answer. Add credit at https://platform.claude.com (Settings → Billing), then try again.`;
+    }
+    if (error.status === 401 || error.status === 403) {
+      return `${lead} was refused because Anthropic rejected the API key, so I did not get an answer. Check ANTHROPIC_API_KEY on the server, then try again.`;
     }
     if (error.afterFallback) {
       return "Grok was unavailable and the Claude backup also failed. I did not get an answer. Try again in a few minutes.";

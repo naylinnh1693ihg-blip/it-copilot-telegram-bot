@@ -485,6 +485,50 @@ describe("Claude client", () => {
   });
 });
 
+describe("Claude failure reasons", () => {
+  async function failBoth(claudeError: unknown) {
+    const grok = grokClient(async () => {
+      throw httpError(429);
+    });
+    const api: ClaudeMessagesApi = {
+      async create() {
+        throw claudeError;
+      },
+      stream() {
+        throw new Error("unused");
+      },
+    };
+    const logger = recordingLogger();
+    const llm = createFallbackClient({ primary: grok, backup: createClaudeClient({ api }), logger, clock: movableClock(), cooldownMs: COOLDOWN });
+    const error = await llm.completeText({ system: "s", user: "u" }).catch((caught: unknown) => caught);
+    return { error, logged: logger.events.find((event) => event.event === "llm_backup_failed") };
+  }
+
+  it("logs Anthropic's reason and says plainly when the Claude account has no credit", async () => {
+    const { BadRequestError } = (await import("@anthropic-ai/sdk")).default;
+    const lowCredit = new BadRequestError(
+      400,
+      { type: "error", error: { type: "invalid_request_error", message: "Your credit balance is too low to access the Anthropic API." }, request_id: "req_123" },
+      undefined,
+      new Headers({ "request-id": "req_123" }),
+    );
+    const { error, logged } = await failBoth(lowCredit);
+    expect(logged).toMatchObject({ provider: "claude", status: 400 });
+    expect(String(logged?.message)).toContain("credit balance is too low");
+    expect(toUserMessage(error)).toBe(
+      "Grok was unavailable, and the Claude backup has no Anthropic credit left, so I did not get an answer. Add credit at https://platform.claude.com (Settings → Billing), then try again.",
+    );
+  });
+
+  it("says plainly when Anthropic rejects the API key", async () => {
+    const { AuthenticationError } = (await import("@anthropic-ai/sdk")).default;
+    const badKey = new AuthenticationError(401, { type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } }, undefined, new Headers());
+    const { error, logged } = await failBoth(badKey);
+    expect(String(logged?.message)).toContain("invalid x-api-key");
+    expect(toUserMessage(error)).toContain("Anthropic rejected the API key");
+  });
+});
+
 describe("week cost with the Claude backup", () => {
   it("shows Grok and Claude separately", () => {
     const text = formatWeekCost([

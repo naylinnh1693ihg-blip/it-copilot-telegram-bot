@@ -72,6 +72,18 @@ export function createFallbackClient(options: {
 
   /** The backup failed after the primary did. Mark it so the reply says both failed. */
   function backupFailed(error: unknown): never {
+    if (!(error instanceof GenerationStoppedError)) {
+      logger.error(
+        {
+          event: "llm_backup_failed",
+          provider: to,
+          status: error instanceof LlmError ? error.status : 0,
+          kind: error instanceof LlmError ? error.kind : "unknown",
+          message: error instanceof Error ? error.message : "error",
+        },
+        "the backup AI provider failed too",
+      );
+    }
     if (error instanceof ClaudeError && error.kind !== "refusal" && !error.afterFallback) {
       throw new ClaudeError(error.message, error.retryable, error.status, {
         kind: error.kind,
