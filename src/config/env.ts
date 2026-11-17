@@ -45,7 +45,9 @@ const schema = z.object({
   ANTHROPIC_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(256).max(64_000).default(8_192),
   /** Requests estimated above this many input tokens (characters / 4) stay on xAI. */
   ANTHROPIC_MAX_INPUT_TOKENS: z.coerce.number().int().positive().default(500_000),
-  /** Comma list from extract, answer, document. Empty sends nothing to Claude. */
+  /** Searches Claude may run for one web-search question. */
+  ANTHROPIC_MAX_WEB_SEARCHES: z.coerce.number().int().min(1).max(10).default(5),
+  /** Comma list from extract, answer, document, tools, web. Empty sends nothing to Claude. */
   LLM_CLAUDE_TASKS: z
     .string()
     .default("")

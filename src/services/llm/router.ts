@@ -35,20 +35,23 @@ function estimateTokens(...parts: string[]): number {
 /**
  * One LlmClient that picks a provider per call.
  * - completeStructured → "extract", streamStructured → "document", streamText and completeText → "answer"
- * - web search, tool calls, and embeddings always run on xAI
+ * - completeText with web search → "web"
+ * - completeWithTools → "tools" when every tool is one of the bot's own functions
+ * - a request that uses xAI's X search or code interpreter, and every embedding, always runs on xAI
  */
 export function createRoutedClient(options: RouterOptions): LlmClient {
   async function route<T>(
     task: ClaudeTask | null,
     size: number,
     call: (provider: Provider) => Promise<T>,
+    canFallback = true,
   ): Promise<T> {
     const eligible = task !== null && size <= options.maxClaudeInputTokens;
     const primary: Provider = eligible && options.tasks.has(task) ? "claude" : "xai";
     try {
       return await call(primary);
     } catch (error) {
-      if (!options.fallback || !eligible || !(error instanceof GrokError)) throw error;
+      if (!options.fallback || !canFallback || !eligible || !(error instanceof GrokError)) throw error;
       const secondary: Provider = primary === "claude" ? "xai" : "claude";
       options.onFallback?.({ task, from: primary, to: secondary, status: error.status, message: error.message });
       return call(secondary);
@@ -75,13 +78,25 @@ export function createRoutedClient(options: RouterOptions): LlmClient {
         provider === "claude" ? claude.standard.streamText!(input) : xai.streamText!(input),
       ),
     completeText(input) {
-      // Web search is an xAI tool, so those calls cannot move.
-      const task = input.webSearch ? null : "answer";
-      return route(task, estimateTokens(input.system, input.user), (provider) =>
+      return route(input.webSearch ? "web" : "answer", estimateTokens(input.system, input.user), (provider) =>
         provider === "claude" ? claude.standard.completeText(input) : xai.completeText(input),
       );
     },
-    completeWithTools: xai.completeWithTools ? (input) => xai.completeWithTools!(input) : undefined,
+    completeWithTools: xai.completeWithTools
+      ? (input) => {
+          // Only the bot's own function tools can run on Claude. Built-in tools (X search, code interpreter) are xAI's.
+          const ownTools = input.tools.every((tool) => tool.type === "function");
+          // Follow-up rounds carry the provider's call ids, so a loop that started on one provider stays there.
+          const firstRound = input.input === undefined;
+          return route(
+            ownTools ? "tools" : null,
+            estimateTokens(input.system, input.user),
+            (provider) =>
+              provider === "claude" ? claude.standard.completeWithTools!(input) : xai.completeWithTools!(input),
+            firstRound,
+          );
+        }
+      : undefined,
     embed: xai.embed ? (input) => xai.embed!(input) : undefined,
   };
 }

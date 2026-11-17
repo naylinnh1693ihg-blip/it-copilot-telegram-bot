@@ -4,6 +4,8 @@ import { executeCustomTool, selectTools, toolDefinitions, type ToolKind } from "
 import { wrapUntrusted } from "../../utils/security.js";
 import { redactString } from "../../utils/text.js";
 import { toIso } from "../../utils/time.js";
+import type { AgentTurn } from "../grok/client.js";
+import { usageUsd } from "../llm/usage.js";
 import { formatWebSearchReply, type Reply } from "./execute.js";
 
 const MAX_ROUNDS = 4;
@@ -24,16 +26,14 @@ function agentSystem(kinds: ToolKind[]): string {
   return lines.join(" ");
 }
 
-async function recordUsage(deps: Deps, user: User, inputTokens: number, outputTokens: number): Promise<void> {
+async function recordUsage(deps: Deps, user: User, turn: AgentTurn): Promise<void> {
   await deps.db.recordUsage({
     userId: user.id,
-    model: deps.env.XAI_MODEL,
+    model: turn.model ?? deps.env.XAI_MODEL,
     purpose: "agent",
-    inputTokens,
-    outputTokens,
-    estimatedUsd:
-      (inputTokens / 1_000_000) * deps.env.XAI_INPUT_USD_PER_MILLION +
-      (outputTokens / 1_000_000) * deps.env.XAI_OUTPUT_USD_PER_MILLION,
+    inputTokens: turn.inputTokens,
+    outputTokens: turn.outputTokens,
+    estimatedUsd: usageUsd(turn, deps.env),
     createdAt: toIso(deps.clock.now()),
   }).catch((error: unknown) => {
     deps.logger.warn(
@@ -63,7 +63,7 @@ export async function runGrokAgent(
 
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
     const turn = await deps.llm.completeWithTools({ system, user: userText, tools, input });
-    await recordUsage(deps, user, turn.inputTokens, turn.outputTokens);
+    await recordUsage(deps, user, turn);
     if (turn.functionCalls.length === 0) {
       answer = turn.text.trim();
       break;

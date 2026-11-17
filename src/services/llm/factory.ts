@@ -16,6 +16,7 @@ export interface LlmEnv {
   ANTHROPIC_TIMEOUT_MS: number;
   ANTHROPIC_MAX_OUTPUT_TOKENS: number;
   ANTHROPIC_MAX_INPUT_TOKENS: number;
+  ANTHROPIC_MAX_WEB_SEARCHES: number;
   LLM_CLAUDE_TASKS: ClaudeTask[];
   LLM_FALLBACK: boolean;
 }
@@ -28,7 +29,7 @@ export interface LlmLogger {
 /**
  * The model client the bot runs with. Without ANTHROPIC_API_KEY this is exactly the xAI client.
  * With it, Claude is added only for the tasks in LLM_CLAUDE_TASKS (and as a fallback when LLM_FALLBACK is true).
- * Claude is added next to xAI, never instead of it: embeddings, web search, and tools need xAI.
+ * Claude is added next to xAI, never instead of it: embeddings, X search, and the code interpreter need xAI.
  */
 export function createLlmClient(env: LlmEnv, logger: LlmLogger): LlmClient | null {
   const xai = env.XAI_API_KEY
@@ -50,6 +51,7 @@ export function createLlmClient(env: LlmEnv, logger: LlmLogger): LlmClient | nul
     baseUrl: env.ANTHROPIC_BASE_URL,
     timeoutMs: env.ANTHROPIC_TIMEOUT_MS,
     maxOutputTokens: env.ANTHROPIC_MAX_OUTPUT_TOKENS,
+    maxWebSearches: env.ANTHROPIC_MAX_WEB_SEARCHES,
   };
   const client = createRoutedClient({
     xai,

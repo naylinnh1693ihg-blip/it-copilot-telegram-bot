@@ -261,10 +261,10 @@ The bot can use Claude next to Grok. It is off until you set `ANTHROPIC_API_KEY`
 
 1. Create an API key in the Anthropic Console and set a monthly spend limit there. A Claude or Cursor subscription does not include API credit.
 2. In the service's **Environment** settings, set `ANTHROPIC_API_KEY`. `render.yaml` does not list it, so add it by hand.
-3. Set `LLM_CLAUDE_TASKS` to the work Claude should take first, from `extract` (intent, tasks, reminders, equipment), `answer` (knowledge answers) and `document` (document analysis). Start with `extract` and compare results before adding more.
+3. Set `LLM_CLAUDE_TASKS` to the work Claude should take first, from `extract` (intent, tasks, reminders, equipment), `answer` (knowledge answers), `document` (document analysis), `tools` (saving notes, searching notes, listing and creating tasks) and `web` (web search answers). Start with `extract` and compare results before adding more. `web` uses Anthropic's own search: Anthropic bills each search separately, that fee is not in the cost estimate, and web search may need to be allowed in your Anthropic Console settings.
 4. Optional: `LLM_FALLBACK=true` retries a failed call once on the other provider. That sends the request to a second vendor, so it is off by default.
 
-Web search, tool calls and embeddings always stay on xAI, so `XAI_API_KEY` is still required. Usage rows record the model that answered, and the weekly cost reply lists Grok and Claude models separately.
+Embeddings, X search and the code interpreter always stay on xAI, so `XAI_API_KEY` is still required. A question that needs X search runs entirely on Grok, even when `tools` or `web` is chosen. Usage rows record the model that answered, and the weekly cost reply lists Grok and Claude models separately.
 
 ## Commands you will use
 

@@ -20,6 +20,7 @@ function fake(name: string, log: Log, failWith?: GrokError): LlmClient {
     streamText: () => hit("streamText"),
     completeWithTools: async () => {
       log.push(`${name}.completeWithTools`);
+      if (failWith) throw failWith;
       return { ...result(), functionCalls: [] };
     },
     embed: async () => {
@@ -122,13 +123,47 @@ describe("llm router", () => {
     expect(log).toEqual(["xai.completeStructured", "fast.completeStructured"]);
   });
 
-  it("never falls back for web search", async () => {
-    const web = build({ tasks: [], fallback: true, xaiFails: new GrokError("quota", true, 429) });
+  it("sends web search and the bot's own tools to Claude only when chosen", async () => {
+    const tool = { type: "function", name: "save_note" };
+    const off = build({ tasks: ["extract", "answer", "document"] });
+    await off.client.completeText({ ...ask, webSearch: true });
+    await off.client.completeWithTools!({ ...ask, tools: [tool] });
+    expect(off.log).toEqual(["xai.completeText", "xai.completeWithTools"]);
+
+    const on = build({ tasks: ["web", "tools"] });
+    await on.client.completeText({ ...ask, webSearch: true });
+    await on.client.completeWithTools!({ ...ask, tools: [tool] });
+    expect(on.log).toEqual(["std.completeText", "std.completeWithTools"]);
+  });
+
+  it("keeps a request that uses X search or the code interpreter on xAI", async () => {
+    const { client, log } = build({ tasks: ["web", "tools"], fallback: true });
+    await client.completeWithTools!({ ...ask, tools: [{ type: "web_search" }, { type: "x_search" }] });
+    await client.completeWithTools!({ ...ask, tools: [{ type: "function", name: "save_note" }, { type: "code_interpreter" }] });
+    expect(log).toEqual(["xai.completeWithTools", "xai.completeWithTools"]);
+  });
+
+  it("does not switch provider in the middle of a tool loop", async () => {
+    const tool = { type: "function", name: "save_note" };
+    const { client, log } = build({
+      tasks: ["tools"],
+      fallback: true,
+      claudeFails: new GrokError("down", true, 529, "claude"),
+    });
     let failed = false;
-    await web.client.completeText({ ...ask, webSearch: true }).catch(() => {
+    await client.completeWithTools!({ ...ask, tools: [tool] }).catch(() => undefined);
+    log.length = 0;
+    await client.completeWithTools!({ ...ask, tools: [tool], input: [{ role: "user", content: "U" }] }).catch(() => {
       failed = true;
     });
     expect(failed).toBe(true);
-    expect(web.log).toEqual(["xai.completeText"]);
+    expect(log).toEqual(["std.completeWithTools"]);
+  });
+
+  it("falls back on a web search when asked", async () => {
+    const { client, log } = build({ tasks: [], fallback: true, xaiFails: new GrokError("quota", true, 429) });
+    const result = await client.completeText({ ...ask, webSearch: true });
+    expect(result.text).toBe("std");
+    expect(log).toEqual(["xai.completeText", "std.completeText"]);
   });
 });

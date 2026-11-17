@@ -14,8 +14,10 @@ import { claudeCost } from "./claudePrices.js";
  * createResilientClient. This file only translates a Responses-shaped request into a Messages
  * request and the answer back, so both providers behave the same for callers.
  *
- * Supported: plain text, structured JSON, images (JPEG and PNG), streaming.
- * Not supported: tool calls, web search, embeddings. Those stay on xAI.
+ * Supported: plain text, structured JSON, images (JPEG and PNG), streaming, custom function tools
+ * (the model asks, the bot runs them), and Anthropic's server-side web search.
+ * Not supported: xAI's x_search and code_interpreter tools, and embeddings. Those stay on xAI.
+ * Web search request fees that Anthropic bills per search are not part of the cost estimate.
  */
 export interface ClaudeClientOptions {
   apiKey: string;
@@ -23,12 +25,16 @@ export interface ClaudeClientOptions {
   baseUrl?: string;
   timeoutMs: number;
   maxOutputTokens: number;
+  /** Searches allowed in one web-search request. Defaults to 5. */
+  maxWebSearches?: number;
   fetch?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
 }
 
 const API_VERSION = "2023-06-01";
 const DATA_URL = /^data:(image\/(?:jpeg|png));base64,([\s\S]+)$/;
+/** Anthropic may pause a long web-search turn. Each pause is continued by sending the answer back. */
+const MAX_CONTINUATIONS = 3;
 
 type Row = Record<string, unknown>;
 
@@ -65,29 +71,74 @@ function userContent(content: unknown): Array<Record<string, unknown>> {
 interface Translated {
   payload: Record<string, unknown>;
   structured: boolean;
+  web: boolean;
+}
+
+/** Anthropic tool ids allow letters, digits, _ and -. The same mapping is applied to a call and its result. */
+function toolId(id: string): string {
+  return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) || "call";
+}
+
+function parseArguments(value: unknown): Record<string, unknown> {
+  if (typeof value !== "string") return {};
+  try {
+    const parsed: unknown = JSON.parse(value || "{}");
+    return isRow(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 function translate(body: Row, options: ClaudeClientOptions): Translated {
-  if (body.tools !== undefined) throw claudeError("Claude does not run tools in this bot yet.", false);
   const input = Array.isArray(body.input) ? body.input.filter(isRow) : [];
   const system = input
     .filter((message) => message.role === "system" && typeof message.content === "string")
     .map((message) => message.content as string)
     .join("\n\n");
-  const user = input.find((message) => message.role === "user");
-  if (!user) throw claudeError("The request had no user message.", false);
+
+  // Responses items become Messages turns: user text, then assistant tool_use blocks, then user tool_result blocks.
+  const messages: Array<{ role: "user" | "assistant"; content: unknown }> = [];
+  let calls: Array<Record<string, unknown>> = [];
+  let results: Array<Record<string, unknown>> = [];
+  const flushCalls = () => {
+    if (calls.length > 0) messages.push({ role: "assistant", content: calls });
+    calls = [];
+  };
+  const flushResults = () => {
+    if (results.length > 0) messages.push({ role: "user", content: results });
+    results = [];
+  };
+  for (const item of input) {
+    if (item.role === "user") {
+      flushCalls();
+      flushResults();
+      messages.push({ role: "user", content: userContent(item.content) });
+    } else if (item.type === "function_call" && typeof item.call_id === "string" && typeof item.name === "string") {
+      flushResults();
+      calls.push({ type: "tool_use", id: toolId(item.call_id), name: item.name, input: parseArguments(item.arguments) });
+    } else if (item.type === "function_call_output" && typeof item.call_id === "string") {
+      flushCalls();
+      const output = typeof item.output === "string" ? item.output : JSON.stringify(item.output ?? "");
+      results.push({ type: "tool_result", tool_use_id: toolId(item.call_id), content: output });
+    }
+  }
+  flushCalls();
+  flushResults();
+  if (messages.length === 0 || messages[0]!.role !== "user") throw claudeError("The request had no user message.", false);
 
   const requested = typeof body.model === "string" && body.model.startsWith("claude-") ? body.model : options.model;
   const payload: Record<string, unknown> = {
     model: requested,
     max_tokens: options.maxOutputTokens,
-    messages: [{ role: "user", content: userContent(user.content) }],
+    messages,
   };
   if (system) payload.system = system;
 
   const format = isRow(body.text) && isRow(body.text.format) ? body.text.format : null;
   let structured = false;
+  let web = false;
   if (format && format.type === "json_schema") {
+    if (body.tools !== undefined) throw claudeError("A structured request cannot also use tools.", false);
     const name = typeof format.name === "string" ? format.name.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) : "";
     const schema = format.schema;
     if (!name || !isRow(schema) || schema.type !== "object") {
@@ -102,8 +153,32 @@ function translate(body: Row, options: ClaudeClientOptions): Translated {
     ];
     payload.tool_choice = { type: "tool", name };
     structured = true;
+  } else if (body.tools !== undefined) {
+    if (!Array.isArray(body.tools)) throw claudeError("Tools must be a list.", false);
+    const tools: Array<Record<string, unknown>> = [];
+    let functions = 0;
+    for (const tool of body.tools) {
+      if (!isRow(tool)) continue;
+      if (tool.type === "function" && typeof tool.name === "string" && isRow(tool.parameters)) {
+        tools.push({
+          name: tool.name,
+          description: typeof tool.description === "string" ? tool.description : "",
+          input_schema: tool.parameters,
+        });
+        functions += 1;
+      } else if (tool.type === "web_search") {
+        web = true;
+      } else {
+        throw claudeError(`The ${String(tool.type)} tool runs only on xAI.`, false);
+      }
+    }
+    if (web && functions > 0) throw claudeError("Web search and custom tools are not mixed on Claude.", false);
+    if (web) {
+      tools.push({ type: "web_search_20250305", name: "web_search", max_uses: options.maxWebSearches ?? 5 });
+    }
+    if (tools.length > 0) payload.tools = tools;
   }
-  return { payload, structured };
+  return { payload, structured, web };
 }
 
 function inputTokensOf(usage: unknown): number {
@@ -131,6 +206,25 @@ async function errorDetail(response: Response): Promise<string> {
     // The body was not JSON. The status code is enough.
   }
   return `HTTP ${response.status}`;
+}
+
+/**
+ * The bot shows a web answer only when it carries [[1]](https://source) markers.
+ * Claude reports its sources as citation metadata, so when the text has no markers, add them from the citations it used.
+ */
+function withSources(text: string, blocks: Row[]): string {
+  if (/\[\[\d+\]\]\(https?:\/\//.test(text)) return text;
+  const urls: string[] = [];
+  for (const block of blocks) {
+    if (block.type !== "text" || !Array.isArray(block.citations)) continue;
+    for (const citation of block.citations) {
+      if (isRow(citation) && typeof citation.url === "string" && /^https?:\/\//.test(citation.url) && !urls.includes(citation.url)) {
+        urls.push(citation.url);
+      }
+    }
+  }
+  if (urls.length === 0 || !text.trim()) return text;
+  return `${text.trimEnd()}\n\n${urls.slice(0, 5).map((url, index) => `[[${index + 1}]](${url})`).join(" ")}`;
 }
 
 export function createClaudeClient(options: ClaudeClientOptions): LlmClient {
@@ -164,13 +258,33 @@ export function createClaudeClient(options: ClaudeClientOptions): LlmClient {
     model: options.model,
     sleep: options.sleep,
     create: async (body, requestOptions) => {
-      const { payload, structured } = translate(body, options);
-      const response = await post(payload, requestOptions?.timeout ?? options.timeoutMs);
-      const data: unknown = await response.json();
-      if (!isRow(data)) throw claudeError("Claude returned an unreadable response.", true);
-      checkStopReason(data.stop_reason);
-      const blocks = Array.isArray(data.content) ? data.content.filter(isRow) : [];
+      const { payload, structured, web } = translate(body, options);
+      const timeout = requestOptions?.timeout ?? options.timeoutMs;
+      let messages = payload.messages as unknown[];
+      let inputTokens = 0;
+      let outputTokens = 0;
+      const blocks: Row[] = [];
+      let finished = false;
+      for (let step = 0; step <= MAX_CONTINUATIONS && !finished; step += 1) {
+        const response = await post({ ...payload, messages }, timeout);
+        const data: unknown = await response.json();
+        if (!isRow(data)) throw claudeError("Claude returned an unreadable response.", true);
+        inputTokens += inputTokensOf(data.usage);
+        outputTokens += outputTokensOf(data.usage);
+        const content = Array.isArray(data.content) ? data.content.filter(isRow) : [];
+        blocks.push(...content);
+        if (data.stop_reason === "pause_turn" && web) {
+          // The search is still running. Send the partial answer back so Claude can finish it.
+          messages = [...messages, { role: "assistant", content }];
+          continue;
+        }
+        checkStopReason(data.stop_reason);
+        finished = true;
+      }
+      if (!finished) throw claudeError("Claude's web search did not finish.", false);
+
       let text = "";
+      let output: Row[] = [];
       if (structured) {
         const call = blocks.find((block) => block.type === "tool_use");
         if (call && call.input !== undefined) text = JSON.stringify(call.input);
@@ -179,11 +293,17 @@ export function createClaudeClient(options: ClaudeClientOptions): LlmClient {
           .filter((block) => block.type === "text" && typeof block.text === "string")
           .map((block) => block.text as string)
           .join("");
+        output = blocks
+          .filter((block) => block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string")
+          .map((block) => ({
+            type: "function_call",
+            call_id: block.id,
+            name: block.name,
+            arguments: JSON.stringify(block.input ?? {}),
+          }));
+        if (web) text = withSources(text, blocks);
       }
-      return {
-        output_text: text,
-        usage: { input_tokens: inputTokensOf(data.usage), output_tokens: outputTokensOf(data.usage) },
-      };
+      return { output_text: text, output, usage: { input_tokens: inputTokens, output_tokens: outputTokens } };
     },
     stream: async function* (body, requestOptions): AsyncGenerator<ResponseStreamEvent> {
       const { payload } = translate(body, options);
@@ -252,7 +372,7 @@ export function createClaudeClient(options: ClaudeClientOptions): LlmClient {
     },
   });
 
-  function label(result: LlmResult): LlmResult {
+  function label<T extends LlmResult>(result: T): T {
     const cost = claudeCost(options.model, result.inputTokens, result.outputTokens);
     return { ...result, model: options.model, estimatedUsd: cost ?? 0 };
   }
@@ -269,6 +389,9 @@ export function createClaudeClient(options: ClaudeClientOptions): LlmClient {
     },
     async streamText(input) {
       return label(await base.streamText!(input));
+    },
+    async completeWithTools(input) {
+      return label(await base.completeWithTools!(input));
     },
   };
 }

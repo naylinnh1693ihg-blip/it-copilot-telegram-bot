@@ -7,6 +7,13 @@ import { GrokError, toUserMessage } from "../src/utils/errors.js";
 const KEY = "sk-ant-test-secret";
 const SCHEMA = { type: "object", additionalProperties: false, required: ["a"], properties: { a: { type: "number" } } };
 
+const SAVE_NOTE_TOOL = {
+  type: "function",
+  name: "save_note",
+  description: "Save one note.",
+  parameters: { type: "object", additionalProperties: false, required: ["title", "content"], properties: { title: { type: "string" }, content: { type: "string" } } },
+};
+
 interface Call {
   url: string;
   headers: Record<string, string>;
@@ -161,17 +168,121 @@ describe("claude adapter", () => {
     expect((error as GrokError).retryable).toBe(false);
   });
 
-  it("refuses web search and tools without calling the API", async () => {
+  it("refuses xAI-only tools without calling the API", async () => {
     const { client, calls } = setup([textAnswer("never")]);
     let error: unknown;
     try {
-      await client.completeText({ system: "S", user: "U", webSearch: true });
+      await client.completeWithTools!({ system: "S", user: "U", tools: [{ type: "x_search" }] });
     } catch (caught) {
       error = caught;
     }
     expect(calls).toHaveLength(0);
     expect(error).toBeInstanceOf(GrokError);
     expect((error as GrokError).retryable).toBe(false);
+  });
+
+  it("refuses to mix web search with custom tools", async () => {
+    const { client, calls } = setup([textAnswer("never")]);
+    let error: unknown;
+    try {
+      await client.completeWithTools!({ system: "S", user: "U", tools: [{ type: "web_search" }, SAVE_NOTE_TOOL] });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(calls).toHaveLength(0);
+    expect(error).toBeInstanceOf(GrokError);
+  });
+
+  it("asks Claude to call a custom tool and returns the call in Responses form", async () => {
+    const { client, calls } = setup([
+      () =>
+        jsonResponse({
+          content: [
+            { type: "text", text: "Saving that." },
+            { type: "tool_use", id: "toolu_01A", name: "save_note", input: { title: "VLAN", content: "VLAN 20 is guest" } },
+          ],
+          stop_reason: "tool_use",
+          usage: { input_tokens: 50, output_tokens: 20 },
+        }),
+    ]);
+    const turn = await client.completeWithTools!({ system: "S", user: "U", tools: [SAVE_NOTE_TOOL] });
+    expect(calls[0]!.body.tools).toEqual([
+      { name: "save_note", description: "Save one note.", input_schema: SAVE_NOTE_TOOL.parameters },
+    ]);
+    expect(calls[0]!.body.tool_choice).toBe(undefined);
+    expect(turn.functionCalls).toEqual([
+      { callId: "toolu_01A", name: "save_note", arguments: '{"title":"VLAN","content":"VLAN 20 is guest"}' },
+    ]);
+    expect(turn.model).toBe("claude-sonnet-5-5");
+  });
+
+  it("turns a Responses follow-up into tool_use and tool_result turns", async () => {
+    const { client, calls } = setup([textAnswer("Saved as note 7.")]);
+    const turn = await client.completeWithTools!({
+      system: "S",
+      user: "U",
+      tools: [SAVE_NOTE_TOOL],
+      input: [
+        { role: "system", content: "S" },
+        { role: "user", content: "U" },
+        { type: "function_call", call_id: "call.1", name: "save_note", arguments: '{"title":"a","content":"b"}' },
+        { type: "function_call_output", call_id: "call.1", output: '{"ok":true,"noteNumber":7}' },
+      ],
+    });
+    expect(calls[0]!.body.system).toBe("S");
+    expect(calls[0]!.body.messages).toEqual([
+      { role: "user", content: [{ type: "text", text: "U" }] },
+      { role: "assistant", content: [{ type: "tool_use", id: "call_1", name: "save_note", input: { title: "a", content: "b" } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "call_1", content: '{"ok":true,"noteNumber":7}' }] },
+    ]);
+    expect(turn.text).toBe("Saved as note 7.");
+    expect(turn.functionCalls).toHaveLength(0);
+  });
+
+  it("runs a web search and adds source markers from the citations", async () => {
+    const { client, calls } = setup([
+      () =>
+        jsonResponse({
+          content: [
+            { type: "server_tool_use", id: "srvtoolu_1", name: "web_search", input: { query: "unifi 9.1 release" } },
+            { type: "web_search_tool_result", tool_use_id: "srvtoolu_1", content: [{ type: "web_search_result", url: "https://example.com/a", title: "A" }] },
+            { type: "text", text: "Version 9.1 shipped in May.", citations: [{ type: "web_search_result_location", url: "https://example.com/a", title: "A" }] },
+          ],
+          stop_reason: "end_turn",
+          usage: { input_tokens: 300, output_tokens: 40 },
+        }),
+    ]);
+    const result = await client.completeText({ system: "S", user: "U", webSearch: true });
+    expect(calls[0]!.body.tools).toEqual([{ type: "web_search_20250305", name: "web_search", max_uses: 5 }]);
+    expect(result.text).toBe("Version 9.1 shipped in May.\n\n[[1]](https://example.com/a)");
+  });
+
+  it("leaves a web answer alone when Claude already wrote source markers", async () => {
+    const answer = "Shipped in May [[1]](https://example.com/a).";
+    const { client } = setup([
+      () =>
+        jsonResponse({
+          content: [{ type: "text", text: answer, citations: [{ url: "https://example.com/a" }] }],
+          stop_reason: "end_turn",
+          usage: { input_tokens: 10, output_tokens: 10 },
+        }),
+    ]);
+    const result = await client.completeText({ system: "S", user: "U", webSearch: true });
+    expect(result.text).toBe(answer);
+  });
+
+  it("continues a paused web search and adds up the usage", async () => {
+    const paused = [{ type: "server_tool_use", id: "srvtoolu_2", name: "web_search", input: { query: "q" } }];
+    const { client, calls } = setup([
+      () => jsonResponse({ content: paused, stop_reason: "pause_turn", usage: { input_tokens: 100, output_tokens: 10 } }),
+      () => jsonResponse({ content: [{ type: "text", text: "Done." }], stop_reason: "end_turn", usage: { input_tokens: 150, output_tokens: 5 } }),
+    ]);
+    const result = await client.completeText({ system: "S", user: "U", webSearch: true });
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.body.messages[1]).toEqual({ role: "assistant", content: paused });
+    expect(result.text).toBe("Done.");
+    expect(result.inputTokens).toBe(250);
+    expect(result.outputTokens).toBe(15);
   });
 
   it("streams text across chunk boundaries and reports usage", async () => {
