@@ -10,3 +10,4 @@ coverage
 .local-backups
 monitoring/data
 *.log
+.claude
